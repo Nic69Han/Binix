@@ -14,6 +14,7 @@
 //! - **wasm**: WebAssembly runtime with SIMD and threading support
 //! - **compositor**: GPU-accelerated compositing
 //! - **process**: Multi-process architecture with site isolation
+//! - **security**: CSP, SRI, CORS, and mixed content blocking
 //! - **ui**: User interface components
 //! - **devtools**: Developer tools (console, inspector, profiler)
 //! - **utils**: Shared utilities and error types
@@ -25,6 +26,7 @@ pub mod js_engine;
 pub mod network;
 pub mod process;
 pub mod renderer;
+pub mod security;
 pub mod ui;
 pub mod utils;
 pub mod wasm;

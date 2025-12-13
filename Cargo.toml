@@ -30,6 +30,8 @@ wasmtime-wasi = "39.0.1"
 quinn = { version = "0.11.9", features = ["runtime-tokio"] }
 rustls = { version = "0.23.35", features = ["ring"] }
 rustls-native-certs = "0.8.2"
+base64 = "0.22.1"
+ring = "0.17.14"
 
 # Core dependencies will be added as we build the browser
 # See docs/browser_technical_specification.md for full list
