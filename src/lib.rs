@@ -13,6 +13,7 @@
 //! - **js_engine**: JavaScript runtime integration
 //! - **wasm**: WebAssembly runtime with SIMD and threading support
 //! - **compositor**: GPU-accelerated compositing
+//! - **process**: Multi-process architecture with site isolation
 //! - **ui**: User interface components
 //! - **devtools**: Developer tools (console, inspector, profiler)
 //! - **utils**: Shared utilities and error types
@@ -22,6 +23,7 @@ pub mod devtools;
 pub mod engine;
 pub mod js_engine;
 pub mod network;
+pub mod process;
 pub mod renderer;
 pub mod ui;
 pub mod utils;
