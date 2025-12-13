@@ -1,15 +1,15 @@
 //! JavaScript engine integration
 //!
-//! Provides integration with V8 JavaScript engine.
+//! Provides integration with Boa JavaScript engine (pure Rust).
 
 mod runtime;
 
 pub use runtime::JsRuntime;
 
-use crate::utils::{error::JsError, Result};
+use crate::utils::Result;
 
 /// Trait for JavaScript engines
-pub trait JavaScriptEngine: Send + Sync {
+pub trait JavaScriptEngine {
     /// Execute JavaScript code and return the result
     fn execute(&mut self, code: &str) -> Result<JsValue>;
 

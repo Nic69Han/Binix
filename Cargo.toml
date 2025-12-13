@@ -20,6 +20,8 @@ wgpu = "27.0.1"
 log = "0.4.29"
 env_logger = "0.11.8"
 thiserror = "2.0.17"
+boa_engine = "0.21.0"
+boa_gc = "0.21.0"
 
 # Core dependencies will be added as we build the browser
 # See docs/browser_technical_specification.md for full list
