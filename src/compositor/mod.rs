@@ -1,10 +1,12 @@
 //! GPU compositor for hardware-accelerated rendering
 //!
-//! Uses Vulkan/Metal for GPU acceleration.
+//! Uses wgpu for cross-platform GPU acceleration (Vulkan/Metal/DX12/WebGPU).
 
+mod gpu;
 mod layer;
 mod painter;
 
+pub use gpu::{GpuContext, GpuError, GpuRenderer, RenderTarget};
 pub use layer::{Layer, LayerTree};
 pub use painter::Painter;
 
@@ -15,7 +17,7 @@ use crate::utils::Result;
 pub struct GpuCompositor {
     layers: LayerTree,
     painter: Painter,
-    // TODO: Add Vulkan/Metal backend
+    gpu_context: GpuContext,
 }
 
 impl GpuCompositor {
@@ -24,7 +26,18 @@ impl GpuCompositor {
         Self {
             layers: LayerTree::new(),
             painter: Painter::new(),
+            gpu_context: GpuContext::new(),
         }
+    }
+
+    /// Initialize GPU resources (async)
+    pub async fn initialize_gpu(&mut self) -> std::result::Result<(), GpuError> {
+        self.gpu_context.initialize().await
+    }
+
+    /// Check if GPU is available
+    pub fn is_gpu_available(&self) -> bool {
+        self.gpu_context.is_initialized()
     }
 
     /// Composite the layout into pixels
@@ -32,7 +45,7 @@ impl GpuCompositor {
         // Build layer tree from layout
         self.layers.build_from_layout(&layout);
 
-        // Paint layers
+        // Paint layers (using GPU if available, fallback to software)
         let frame = self.painter.paint(&self.layers)?;
 
         Ok(frame)
@@ -41,6 +54,11 @@ impl GpuCompositor {
     /// Force a repaint of dirty regions
     pub fn repaint_dirty(&mut self) -> Result<Frame> {
         self.painter.paint(&self.layers)
+    }
+
+    /// Get GPU context reference
+    pub fn gpu_context(&self) -> &GpuContext {
+        &self.gpu_context
     }
 }
 
