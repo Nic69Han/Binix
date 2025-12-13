@@ -27,12 +27,13 @@ egui = "0.33.3"
 eframe = "0.33.3"
 wasmtime = "39.0.1"
 wasmtime-wasi = "39.0.1"
-quinn = { version = "0.11.9", features = ["runtime-tokio"] }
-rustls = { version = "0.23.35", features = ["ring"] }
+quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls", "ring"] }
+rustls = { version = "0.23.35", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8.2"
 base64 = "0.22.1"
 ring = "0.17.14"
 markup5ever_rcdom = "0.36.0"
+image = "0.25.9"
 
 # Core dependencies will be added as we build the browser
 # See docs/browser_technical_specification.md for full list
@@ -53,9 +54,15 @@ pretty_assertions = "1.4"
 # Mocking framework
 mockall = "0.12"
 
+[features]
+default = []
+# Enable benchmarks - only run in CI to avoid freezing local machines
+run-benchmarks = []
+
 [[bench]]
 name = "benchmarks"
 harness = false
+required-features = ["run-benchmarks"]
 
 [profile.release]
 lto = true

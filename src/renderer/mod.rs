@@ -15,7 +15,11 @@ pub use css::CssParser;
 pub use dirty_tracking::{DirtyTracker, LayoutChange, Rect};
 pub use dom::{Document, ElementData, Node, NodeType};
 pub use html::HtmlParser;
-pub use layout::{LayoutBox, LayoutEngine};
+pub use layout::{
+    AlignItems, DisplayType, FlexDirection, FlexProperties, FlexWrap, GridPosition,
+    GridProperties, GridTrackSize, JustifyContent, LayoutBox, LayoutEngine,
+    layout_to_render_elements,
+};
 pub use layout_batch::{BatchConfig, BatchResult, LayoutBatcher};
 pub use streaming::{ParsedChunk, ParserState, StreamingParser};
 pub use style::StyleEngine;

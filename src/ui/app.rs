@@ -1,7 +1,8 @@
 //! Main browser application using eframe/egui
 
-use super::{ElementKind, TabManager, Theme, UiConfig};
+use super::{ElementKind, SharedImageCache, TabManager, Theme, UiConfig, create_shared_cache};
 use eframe::egui;
+use std::collections::HashMap;
 
 /// Main browser application
 pub struct BrowserApp {
@@ -15,6 +16,10 @@ pub struct BrowserApp {
     show_settings: bool,
     /// Show developer tools
     show_devtools: bool,
+    /// Image cache
+    image_cache: SharedImageCache,
+    /// Loaded textures for egui
+    textures: HashMap<String, egui::TextureHandle>,
 }
 
 impl BrowserApp {
@@ -29,6 +34,81 @@ impl BrowserApp {
             url_input: String::new(),
             show_settings: false,
             show_devtools: false,
+            image_cache: create_shared_cache(),
+            textures: HashMap::new(),
+        }
+    }
+
+    /// Queue an image for loading
+    fn queue_image_load(&mut self, url: String) {
+        let mut cache = self.image_cache.lock().unwrap();
+        cache.request(&url);
+    }
+
+    /// Process pending image loads (called each frame)
+    fn process_image_loads(&mut self, ctx: &egui::Context) {
+        let pending = {
+            let mut cache = self.image_cache.lock().unwrap();
+            cache.take_pending()
+        };
+
+        for url in pending {
+            let cache = self.image_cache.clone();
+            let ctx = ctx.clone();
+            let url_clone = url.clone();
+
+            // Spawn async task to load image
+            std::thread::spawn(move || {
+                match load_image_blocking(&url_clone) {
+                    Ok(image_data) => {
+                        let loaded = super::LoadedImage {
+                            data: std::sync::Arc::new(image_data),
+                            url: url_clone.clone(),
+                            width: 0,
+                            height: 0,
+                        };
+                        let mut cache = cache.lock().unwrap();
+                        cache.set_loaded(&url_clone, loaded);
+                        ctx.request_repaint();
+                    }
+                    Err(e) => {
+                        let mut cache = cache.lock().unwrap();
+                        cache.set_failed(&url_clone, e);
+                        ctx.request_repaint();
+                    }
+                }
+            });
+        }
+
+        // Convert loaded images to textures
+        self.update_textures(ctx);
+    }
+
+    /// Update egui textures from loaded images
+    fn update_textures(&mut self, ctx: &egui::Context) {
+        // Collect images to convert to textures
+        let to_load: Vec<(String, egui::ColorImage)> = {
+            let cache = self.image_cache.lock().unwrap();
+            cache.images.iter()
+                .filter(|(url, _)| !self.textures.contains_key(*url))
+                .filter_map(|(url, state)| {
+                    if let super::ImageState::Loaded(loaded) = state {
+                        Some((url.clone(), (*loaded.data).clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        // Now create textures without holding the lock
+        for (url, image) in to_load {
+            let texture = ctx.load_texture(
+                &url,
+                image,
+                egui::TextureOptions::default(),
+            );
+            self.textures.insert(url, texture);
         }
     }
 
@@ -147,7 +227,7 @@ impl BrowserApp {
         }
     }
 
-    /// Render parsed HTML content
+    /// Render parsed HTML content with CSS styling
     fn render_page_content(&mut self, ui: &mut egui::Ui, content: &super::PageContent) {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -155,56 +235,213 @@ impl BrowserApp {
                 ui.set_min_width(ui.available_width());
 
                 for element in &content.elements {
-                    let indent = element.indent as f32 * 20.0;
-
-                    ui.horizontal(|ui| {
-                        ui.add_space(indent);
-
-                        match &element.kind {
-                            ElementKind::Heading1 => {
-                                ui.heading(egui::RichText::new(&element.text).size(28.0).strong());
-                            }
-                            ElementKind::Heading2 => {
-                                ui.heading(egui::RichText::new(&element.text).size(22.0).strong());
-                            }
-                            ElementKind::Heading3 => {
-                                ui.heading(egui::RichText::new(&element.text).size(18.0).strong());
-                            }
-                            ElementKind::Paragraph => {
-                                ui.label(&element.text);
-                            }
-                            ElementKind::Link => {
-                                let link = ui.link(
-                                    egui::RichText::new(&element.text)
-                                        .color(egui::Color32::from_rgb(0, 102, 204)),
-                                );
-                                if link.clicked() {
-                                    if let Some(href) = &element.href {
-                                        self.url_input = href.clone();
-                                        if let Some(tab) = self.tabs.active_tab_mut() {
-                                            tab.navigate(href);
-                                        }
-                                    }
-                                }
-                                if link.hovered() {
-                                    if let Some(href) = &element.href {
-                                        link.on_hover_text(href);
-                                    }
-                                }
-                            }
-                            ElementKind::ListItem => {
-                                ui.label(&element.text);
-                            }
-                            ElementKind::Code => {
-                                ui.code(&element.text);
-                            }
-                            ElementKind::Text => {
-                                ui.label(&element.text);
-                            }
-                        }
-                    });
+                    self.render_element(ui, element);
                 }
             });
+    }
+
+    /// Render a single element with its CSS styles
+    fn render_element(&mut self, ui: &mut egui::Ui, element: &super::RenderElement) {
+        let style = &element.style;
+
+        // Apply margin (top)
+        if style.margin[0] > 0.0 {
+            ui.add_space(style.margin[0]);
+        }
+
+        // Calculate indent from x position
+        let indent = element.bounds.x;
+
+        ui.horizontal(|ui| {
+            // Left margin + indent
+            ui.add_space(indent + style.margin[3]);
+
+            // Create styled text
+            let mut rich_text = egui::RichText::new(&element.text)
+                .size(style.font_size);
+
+            // Apply text color
+            rich_text = rich_text.color(egui::Color32::from_rgba_unmultiplied(
+                style.color[0],
+                style.color[1],
+                style.color[2],
+                style.color[3],
+            ));
+
+            // Apply font weight
+            if style.font_weight_bold {
+                rich_text = rich_text.strong();
+            }
+
+            // Apply font style
+            if style.font_style_italic {
+                rich_text = rich_text.italics();
+            }
+
+            // Apply underline
+            if style.text_decoration_underline {
+                rich_text = rich_text.underline();
+            }
+
+            // Render based on element type with background
+            match &element.kind {
+                ElementKind::Heading1 | ElementKind::Heading2 | ElementKind::Heading3 => {
+                    // Render headings with optional background
+                    if let Some(bg) = style.background_color {
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]))
+                            .inner_margin(style.padding[0])
+                            .show(ui, |ui| {
+                                ui.heading(rich_text);
+                            });
+                    } else {
+                        ui.heading(rich_text);
+                    }
+                }
+                ElementKind::Link => {
+                    let link = ui.link(rich_text);
+                    if link.clicked() {
+                        if let Some(href) = &element.href {
+                            self.url_input = href.clone();
+                            if let Some(tab) = self.tabs.active_tab_mut() {
+                                tab.navigate(href);
+                            }
+                        }
+                    }
+                    if link.hovered() {
+                        if let Some(href) = &element.href {
+                            link.on_hover_text(href);
+                        }
+                    }
+                }
+                ElementKind::Code => {
+                    // Code with background
+                    let bg = style.background_color.unwrap_or([245, 245, 245, 255]);
+                    egui::Frame::NONE
+                        .fill(egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]))
+                        .inner_margin(style.padding[0])
+                        .corner_radius(3)
+                        .show(ui, |ui| {
+                            ui.label(rich_text.monospace());
+                        });
+                }
+                ElementKind::Paragraph | ElementKind::Text | ElementKind::ListItem => {
+                    if let Some(bg) = style.background_color {
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]))
+                            .inner_margin(style.padding[0])
+                            .show(ui, |ui| {
+                                ui.label(rich_text);
+                            });
+                    } else {
+                        ui.label(rich_text);
+                    }
+                }
+                ElementKind::Image => {
+                    // Try to render actual image if loaded
+                    if let Some(src) = &element.src {
+                        if let Some(texture) = self.textures.get(src) {
+                            // Render loaded image
+                            let size = texture.size_vec2();
+                            let max_width = ui.available_width().min(600.0);
+                            let scale = if size.x > max_width { max_width / size.x } else { 1.0 };
+                            ui.image((texture.id(), egui::vec2(size.x * scale, size.y * scale)));
+                        } else {
+                            // Image not loaded yet, show placeholder and queue loading
+                            self.queue_image_load(src.clone());
+                            egui::Frame::NONE
+                                .fill(egui::Color32::from_rgb(240, 240, 240))
+                                .inner_margin(8.0)
+                                .corner_radius(4)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label(element.alt.as_deref().unwrap_or("[Loading...]"));
+                                    });
+                                });
+                        }
+                    } else {
+                        // No src, show placeholder with alt text
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_rgb(240, 240, 240))
+                            .inner_margin(8.0)
+                            .corner_radius(4)
+                            .show(ui, |ui| {
+                                ui.label(rich_text);
+                            });
+                    }
+                }
+                ElementKind::Blockquote => {
+                    // Render blockquote with left border
+                    egui::Frame::NONE
+                        .fill(egui::Color32::from_rgb(250, 250, 250))
+                        .inner_margin(egui::Margin {
+                            left: 16,
+                            right: 8,
+                            top: 8,
+                            bottom: 8,
+                        })
+                        .show(ui, |ui| {
+                            // Draw left border
+                            let rect = ui.available_rect_before_wrap();
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(
+                                    egui::pos2(rect.left() - 12.0, rect.top()),
+                                    egui::vec2(4.0, rect.height().max(20.0)),
+                                ),
+                                0.0,
+                                egui::Color32::from_rgb(200, 200, 200),
+                            );
+                            ui.label(rich_text);
+                        });
+                }
+                ElementKind::Table | ElementKind::TableRow => {
+                    // Tables are handled structurally, individual cells are rendered
+                    ui.label(rich_text);
+                }
+                ElementKind::TableCell => {
+                    egui::Frame::NONE
+                        .inner_margin(egui::Margin::symmetric(12, 8))
+                        .show(ui, |ui| {
+                            ui.label(rich_text);
+                        });
+                }
+                ElementKind::HorizontalRule => {
+                    // Render horizontal rule
+                    let available_width = ui.available_width();
+                    ui.add(egui::Separator::default().horizontal());
+                    let _ = available_width; // Suppress warning
+                }
+                ElementKind::Button => {
+                    // Render button
+                    let bg = style.background_color.unwrap_or([59, 130, 246, 255]);
+                    if ui.add(egui::Button::new(rich_text)
+                        .fill(egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]))
+                    ).clicked() {
+                        // Button click handling would go here
+                    }
+                }
+                ElementKind::Input => {
+                    // Render input field placeholder
+                    egui::Frame::NONE
+                        .fill(egui::Color32::from_rgb(255, 255, 255))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 200)))
+                        .inner_margin(8)
+                        .corner_radius(4)
+                        .show(ui, |ui| {
+                            ui.label(rich_text.weak());
+                        });
+                }
+                ElementKind::Label => {
+                    ui.label(rich_text);
+                }
+            }
+        });
+
+        // Apply margin (bottom)
+        if style.margin[2] > 0.0 {
+            ui.add_space(style.margin[2]);
+        }
     }
 
     /// Render new tab page
@@ -277,6 +514,9 @@ impl BrowserApp {
 
 impl eframe::App for BrowserApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Process pending image loads
+        self.process_image_loads(ctx);
+
         // Apply theme
         match self.config.theme {
             Theme::Light => ctx.set_visuals(egui::Visuals::light()),
@@ -370,4 +610,28 @@ mod tests {
         assert_eq!(config.window_height, 720);
         assert_eq!(config.default_zoom, 1.0);
     }
+}
+
+/// Load an image from URL synchronously (blocking)
+fn load_image_blocking(url: &str) -> Result<egui::ColorImage, String> {
+    // Use reqwest blocking client
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("Failed to fetch image: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP error: {}", response.status()));
+    }
+
+    let bytes = response
+        .bytes()
+        .map_err(|e| format!("Failed to read image data: {}", e))?;
+
+    super::decode_image(&bytes)
 }

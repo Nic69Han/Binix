@@ -2,6 +2,7 @@
 
 mod app;
 mod events;
+mod images;
 mod tab;
 mod window;
 
@@ -10,7 +11,8 @@ pub use events::{
     Event, EventData, EventDispatcher, EventHandler, EventQueue, EventType, KeyboardEvent,
     Modifiers, MouseButton, MouseEvent, ScrollEvent, TouchEvent, TouchPoint,
 };
-pub use tab::{ElementKind, PageContent, RenderElement, Tab, TabId, TabManager};
+pub use images::{ImageCache, ImageState, LoadedImage, SharedImageCache, create_shared_cache, decode_image};
+pub use tab::{ElementBounds, ElementKind, ElementStyle, PageContent, RenderElement, Tab, TabId, TabManager, TextAlign};
 pub use window::Window;
 
 /// UI configuration
