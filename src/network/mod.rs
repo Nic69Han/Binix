@@ -2,14 +2,18 @@
 //!
 //! Implements HTTP/3 with connection pooling and predictive loading.
 
+mod cache;
 mod client;
 mod dns;
 mod http3;
+mod priority;
 mod request;
 mod response;
 
+pub use cache::{CacheControl, CacheEntry, CacheStats, HttpCache};
 pub use client::NetworkClient;
 pub use http3::{Http3Client, Http3Config, Http3Connection};
+pub use priority::{ImportanceHint, Priority, PrioritizedRequest, ResourceQueue, ResourceType};
 pub use request::Request;
 pub use response::Response;
 
