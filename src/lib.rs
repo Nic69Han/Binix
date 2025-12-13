@@ -14,9 +14,11 @@
 //! - **wasm**: WebAssembly runtime with SIMD and threading support
 //! - **compositor**: GPU-accelerated compositing
 //! - **ui**: User interface components
+//! - **devtools**: Developer tools (console, inspector, profiler)
 //! - **utils**: Shared utilities and error types
 
 pub mod compositor;
+pub mod devtools;
 pub mod engine;
 pub mod js_engine;
 pub mod network;
