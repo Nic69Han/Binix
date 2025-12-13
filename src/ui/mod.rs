@@ -1,10 +1,15 @@
 //! User interface components for Binix browser
 
 mod app;
+mod events;
 mod tab;
 mod window;
 
 pub use app::{run, BrowserApp};
+pub use events::{
+    Event, EventData, EventDispatcher, EventHandler, EventQueue, EventType, KeyboardEvent,
+    Modifiers, MouseButton, MouseEvent, ScrollEvent, TouchEvent, TouchPoint,
+};
 pub use tab::{Tab, TabId, TabManager};
 pub use window::Window;
 
