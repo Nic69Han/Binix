@@ -1,0 +1,42 @@
+[package]
+name = "binix"
+version = "0.1.0"
+edition = "2024"
+description = "Ultra-High-Performance Web Browser"
+license = "MIT"
+authors = ["Binix Team"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Core dependencies will be added as we build the browser
+# See docs/browser_technical_specification.md for full list
+
+[dev-dependencies]
+# Benchmarking - statistical performance testing
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Property-based testing - automatic test case generation
+proptest = "1.4"
+
+# Async testing utilities
+tokio-test = "0.4"
+
+# Test utilities
+pretty_assertions = "1.4"
+
+# Mocking framework
+mockall = "0.12"
+
+[[bench]]
+name = "benchmarks"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+debug = true
