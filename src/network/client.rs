@@ -120,6 +120,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires network access - run with `cargo test -- --ignored`
     async fn test_get_request() {
         let client = NetworkClient::new();
         // Test with a known working URL

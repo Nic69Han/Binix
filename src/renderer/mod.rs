@@ -9,7 +9,7 @@ mod layout;
 mod style;
 
 pub use css::CssParser;
-pub use dom::{Document, Node, NodeType};
+pub use dom::{Document, ElementData, Node, NodeType};
 pub use html::HtmlParser;
 pub use layout::{LayoutBox, LayoutEngine};
 pub use style::StyleEngine;
