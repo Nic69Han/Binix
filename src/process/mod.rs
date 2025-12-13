@@ -12,7 +12,6 @@ mod renderer_process;
 mod sandbox;
 
 pub use ipc::{IpcChannel, IpcMessage, IpcMessageType};
-pub use manager::{ProcessManager, ProcessInfo, ProcessType};
+pub use manager::{ProcessInfo, ProcessManager, ProcessType};
 pub use renderer_process::RendererProcess;
 pub use sandbox::{Sandbox, SandboxPolicy};
-

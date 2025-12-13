@@ -5,12 +5,12 @@
 //! - Emit partial DOM trees for early rendering
 //! - Support for chunked transfer encoding
 
+use html5ever::tendril::TendrilSink;
+use html5ever::{ParseOpts, parse_document};
+use markup5ever_rcdom::{Handle, RcDom};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use html5ever::tendril::TendrilSink;
-use html5ever::{parse_document, ParseOpts};
-use markup5ever_rcdom::{Handle, RcDom};
 
 /// Parser state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,7 +179,7 @@ mod tests {
     fn test_streaming_parser_feed() {
         let mut parser = StreamingParser::new();
         let chunk = parser.feed("<html><head>");
-        
+
         assert_eq!(parser.state(), ParserState::Parsing);
         assert_eq!(parser.chunks_received(), 1);
         assert!(chunk.node_count > 0);
@@ -192,7 +192,7 @@ mod tests {
         parser.feed("<head><title>Test</title></head>");
         parser.feed("<body><p>Hello</p></body>");
         parser.feed("</html>");
-        
+
         assert_eq!(parser.chunks_received(), 4);
     }
 
@@ -211,9 +211,8 @@ mod tests {
         let mut parser = StreamingParser::new();
         parser.feed("<html>");
         parser.reset();
-        
+
         assert_eq!(parser.state(), ParserState::Idle);
         assert_eq!(parser.chunks_received(), 0);
     }
 }
-

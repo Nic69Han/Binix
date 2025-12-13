@@ -123,11 +123,9 @@ impl Console {
 
     /// Get all messages
     pub fn messages(&self) -> impl Iterator<Item = &ConsoleMessage> {
-        self.messages.iter().filter(|m| {
-            self.filter_level
-                .map(|f| m.level == f)
-                .unwrap_or(true)
-        })
+        self.messages
+            .iter()
+            .filter(|m| self.filter_level.map(|f| m.level == f).unwrap_or(true))
     }
 
     /// Get message count
@@ -201,4 +199,3 @@ mod tests {
         assert_eq!(LogLevel::Warn.as_str(), "WARN");
     }
 }
-

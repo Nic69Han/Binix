@@ -107,4 +107,3 @@ impl Frame {
         self.pixels[idx + 3] = rgba[3];
     }
 }
-

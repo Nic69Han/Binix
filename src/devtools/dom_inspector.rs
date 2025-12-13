@@ -215,4 +215,3 @@ mod tests {
         assert_eq!(node.get_attribute("class"), Some(&"container".to_string()));
     }
 }
-

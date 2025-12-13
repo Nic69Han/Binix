@@ -127,8 +127,11 @@ impl Sandbox {
         if !self.active || self.policy.allow_network {
             return true;
         }
-        
-        self.record_violation(ViolationType::NetworkAccess, format!("Network access to: {}", url));
+
+        self.record_violation(
+            ViolationType::NetworkAccess,
+            format!("Network access to: {}", url),
+        );
         false
     }
 
@@ -137,8 +140,11 @@ impl Sandbox {
         if !self.active || self.policy.allow_filesystem {
             return true;
         }
-        
-        self.record_violation(ViolationType::FileSystemAccess, format!("Filesystem access to: {}", path));
+
+        self.record_violation(
+            ViolationType::FileSystemAccess,
+            format!("Filesystem access to: {}", path),
+        );
         false
     }
 
@@ -147,8 +153,11 @@ impl Sandbox {
         if !self.active || self.policy.is_origin_allowed(origin) {
             return true;
         }
-        
-        self.record_violation(ViolationType::CrossOriginAccess, format!("Cross-origin access to: {}", origin));
+
+        self.record_violation(
+            ViolationType::CrossOriginAccess,
+            format!("Cross-origin access to: {}", origin),
+        );
         false
     }
 
@@ -212,7 +221,7 @@ mod tests {
         let mut policy = SandboxPolicy::strict();
         policy.allow_origin("https://trusted.com");
         let mut sandbox = Sandbox::new(policy);
-        
+
         assert!(sandbox.check_cross_origin("https://trusted.com"));
         assert!(!sandbox.check_cross_origin("https://untrusted.com"));
     }
@@ -224,4 +233,3 @@ mod tests {
         assert!(sandbox.check_network("https://example.com"));
     }
 }
-

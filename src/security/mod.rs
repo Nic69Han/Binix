@@ -6,13 +6,13 @@
 //! - Cross-Origin Resource Sharing (CORS)
 //! - Mixed content blocking
 
+mod cors;
 mod csp;
 mod sri;
-mod cors;
 
-pub use csp::{ContentSecurityPolicy, CspDirective, CspViolation};
-pub use sri::{SubresourceIntegrity, SriAlgorithm, SriHash};
 pub use cors::{CorsPolicy, CorsRequest, CorsResult};
+pub use csp::{ContentSecurityPolicy, CspDirective, CspViolation};
+pub use sri::{SriAlgorithm, SriHash, SubresourceIntegrity};
 
 /// Security manager coordinating all security features
 pub struct SecurityManager {
@@ -73,12 +73,12 @@ impl SecurityManager {
         if !self.mixed_content_blocking {
             return true;
         }
-        
+
         // If page is HTTPS, resource must also be HTTPS
         if Self::is_secure_url(page_url) && !Self::is_secure_url(resource_url) {
             return false;
         }
-        
+
         true
     }
 }
@@ -112,15 +112,20 @@ mod tests {
     #[test]
     fn test_mixed_content() {
         let manager = SecurityManager::new();
-        
+
         // HTTPS page loading HTTPS resource - OK
-        assert!(manager.check_mixed_content("https://example.com", "https://cdn.example.com/script.js"));
-        
+        assert!(
+            manager.check_mixed_content("https://example.com", "https://cdn.example.com/script.js")
+        );
+
         // HTTPS page loading HTTP resource - blocked
-        assert!(!manager.check_mixed_content("https://example.com", "http://cdn.example.com/script.js"));
-        
+        assert!(
+            !manager.check_mixed_content("https://example.com", "http://cdn.example.com/script.js")
+        );
+
         // HTTP page loading HTTP resource - OK
-        assert!(manager.check_mixed_content("http://example.com", "http://cdn.example.com/script.js"));
+        assert!(
+            manager.check_mixed_content("http://example.com", "http://cdn.example.com/script.js")
+        );
     }
 }
-

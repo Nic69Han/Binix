@@ -1,7 +1,7 @@
 //! CSS3 parser and stylesheet representation using cssparser
 
 use crate::utils::Result;
-use cssparser::{Parser, ParserInput, Token, ParseError, BasicParseErrorKind};
+use cssparser::{BasicParseErrorKind, ParseError, Parser, ParserInput, Token};
 
 /// CSS value types
 #[derive(Debug, Clone, PartialEq)]
@@ -193,7 +193,10 @@ impl CssParser {
     }
 
     /// Parse a single CSS rule
-    fn parse_rule<'i>(&self, parser: &mut Parser<'i, '_>) -> std::result::Result<Rule, ParseError<'i, ()>> {
+    fn parse_rule<'i>(
+        &self,
+        parser: &mut Parser<'i, '_>,
+    ) -> std::result::Result<Rule, ParseError<'i, ()>> {
         // Collect selector tokens until we hit a curly brace
         let mut selector_str = String::new();
 
@@ -205,7 +208,10 @@ impl CssParser {
                     // Parse declarations inside the block
                     let declarations = parser.parse_nested_block(|p| self.parse_declarations(p))?;
                     let selectors = self.parse_selector_string(&selector_str);
-                    return Ok(Rule { selectors, declarations });
+                    return Ok(Rule {
+                        selectors,
+                        declarations,
+                    });
                 }
                 Ok(token) => {
                     // Append token to selector string
@@ -311,11 +317,18 @@ impl CssParser {
             }
         }
 
-        Selector { tag_name, id, classes }
+        Selector {
+            tag_name,
+            id,
+            classes,
+        }
     }
 
     /// Parse declarations inside a rule block
-    fn parse_declarations<'i>(&self, parser: &mut Parser<'i, '_>) -> std::result::Result<Vec<Declaration>, ParseError<'i, ()>> {
+    fn parse_declarations<'i>(
+        &self,
+        parser: &mut Parser<'i, '_>,
+    ) -> std::result::Result<Vec<Declaration>, ParseError<'i, ()>> {
         let mut declarations = Vec::new();
 
         loop {
@@ -325,20 +338,21 @@ impl CssParser {
             }
 
             // Try to parse a declaration
-            let result: std::result::Result<Declaration, ParseError<'i, ()>> = parser.try_parse(|p| {
-                let property = p.expect_ident()?.to_string();
-                p.expect_colon()?;
-                p.skip_whitespace();
-                let value = self.parse_value(p)?;
+            let result: std::result::Result<Declaration, ParseError<'i, ()>> =
+                parser.try_parse(|p| {
+                    let property = p.expect_ident()?.to_string();
+                    p.expect_colon()?;
+                    p.skip_whitespace();
+                    let value = self.parse_value(p)?;
 
-                // Optional semicolon
-                let _ = p.try_parse::<_, _, ParseError<()>>(|p2| {
-                    p2.expect_semicolon()?;
-                    Ok(())
+                    // Optional semicolon
+                    let _ = p.try_parse::<_, _, ParseError<()>>(|p2| {
+                        p2.expect_semicolon()?;
+                        Ok(())
+                    });
+
+                    Ok(Declaration { property, value })
                 });
-
-                Ok(Declaration { property, value })
-            });
 
             match result {
                 Ok(decl) => declarations.push(decl),
@@ -353,7 +367,10 @@ impl CssParser {
     }
 
     /// Parse a CSS value
-    fn parse_value<'i>(&self, parser: &mut Parser<'i, '_>) -> std::result::Result<Value, ParseError<'i, ()>> {
+    fn parse_value<'i>(
+        &self,
+        parser: &mut Parser<'i, '_>,
+    ) -> std::result::Result<Value, ParseError<'i, ()>> {
         parser.skip_whitespace();
 
         let token = parser.next()?.clone();
@@ -402,15 +419,28 @@ impl CssParser {
     }
 
     /// Parse rgb() or rgba() function
-    fn parse_rgb_function<'i>(&self, parser: &mut Parser<'i, '_>, has_alpha: bool) -> std::result::Result<Value, ParseError<'i, ()>> {
+    fn parse_rgb_function<'i>(
+        &self,
+        parser: &mut Parser<'i, '_>,
+        has_alpha: bool,
+    ) -> std::result::Result<Value, ParseError<'i, ()>> {
         let r = self.parse_color_component(parser)?;
-        let _ = parser.try_parse::<_, _, ParseError<()>>(|p| { p.expect_comma()?; Ok(()) });
+        let _ = parser.try_parse::<_, _, ParseError<()>>(|p| {
+            p.expect_comma()?;
+            Ok(())
+        });
         let g = self.parse_color_component(parser)?;
-        let _ = parser.try_parse::<_, _, ParseError<()>>(|p| { p.expect_comma()?; Ok(()) });
+        let _ = parser.try_parse::<_, _, ParseError<()>>(|p| {
+            p.expect_comma()?;
+            Ok(())
+        });
         let b = self.parse_color_component(parser)?;
 
         let a = if has_alpha {
-            let _ = parser.try_parse::<_, _, ParseError<()>>(|p| { p.expect_comma()?; Ok(()) });
+            let _ = parser.try_parse::<_, _, ParseError<()>>(|p| {
+                p.expect_comma()?;
+                Ok(())
+            });
             self.parse_alpha_component(parser)?
         } else {
             255
@@ -420,29 +450,42 @@ impl CssParser {
     }
 
     /// Parse a color component (0-255 or percentage)
-    fn parse_color_component<'i>(&self, parser: &mut Parser<'i, '_>) -> std::result::Result<u8, ParseError<'i, ()>> {
+    fn parse_color_component<'i>(
+        &self,
+        parser: &mut Parser<'i, '_>,
+    ) -> std::result::Result<u8, ParseError<'i, ()>> {
         parser.skip_whitespace();
         let token = parser.next()?.clone();
         match token {
             Token::Number { value, .. } => Ok((value.clamp(0.0, 255.0)) as u8),
-            Token::Percentage { unit_value, .. } => Ok((unit_value * 255.0).clamp(0.0, 255.0) as u8),
+            Token::Percentage { unit_value, .. } => {
+                Ok((unit_value * 255.0).clamp(0.0, 255.0) as u8)
+            }
             _ => Err(parser.new_error(BasicParseErrorKind::UnexpectedToken(token))),
         }
     }
 
     /// Parse alpha component (0-1 or percentage)
-    fn parse_alpha_component<'i>(&self, parser: &mut Parser<'i, '_>) -> std::result::Result<u8, ParseError<'i, ()>> {
+    fn parse_alpha_component<'i>(
+        &self,
+        parser: &mut Parser<'i, '_>,
+    ) -> std::result::Result<u8, ParseError<'i, ()>> {
         parser.skip_whitespace();
         let token = parser.next()?.clone();
         match token {
             Token::Number { value, .. } => Ok((value.clamp(0.0, 1.0) * 255.0) as u8),
-            Token::Percentage { unit_value, .. } => Ok((unit_value * 255.0).clamp(0.0, 255.0) as u8),
+            Token::Percentage { unit_value, .. } => {
+                Ok((unit_value * 255.0).clamp(0.0, 255.0) as u8)
+            }
             _ => Err(parser.new_error(BasicParseErrorKind::UnexpectedToken(token))),
         }
     }
 
     /// Skip to the next rule (after closing brace)
-    fn skip_to_next_rule<'i>(&self, parser: &mut Parser<'i, '_>) -> std::result::Result<(), ParseError<'i, ()>> {
+    fn skip_to_next_rule<'i>(
+        &self,
+        parser: &mut Parser<'i, '_>,
+    ) -> std::result::Result<(), ParseError<'i, ()>> {
         loop {
             match parser.next() {
                 Ok(Token::CurlyBracketBlock) => {
@@ -460,7 +503,10 @@ impl CssParser {
     }
 
     /// Skip to next semicolon or end of block
-    fn skip_to_semicolon<'i>(&self, parser: &mut Parser<'i, '_>) -> std::result::Result<(), ParseError<'i, ()>> {
+    fn skip_to_semicolon<'i>(
+        &self,
+        parser: &mut Parser<'i, '_>,
+    ) -> std::result::Result<(), ParseError<'i, ()>> {
         loop {
             match parser.next() {
                 Ok(Token::Semicolon) => break,
@@ -489,7 +535,10 @@ mod tests {
         let stylesheet = parser.parse(css).unwrap();
 
         assert_eq!(stylesheet.rules.len(), 1);
-        assert_eq!(stylesheet.rules[0].selectors[0].tag_name, Some("body".to_string()));
+        assert_eq!(
+            stylesheet.rules[0].selectors[0].tag_name,
+            Some("body".to_string())
+        );
         assert_eq!(stylesheet.rules[0].declarations.len(), 1);
         assert_eq!(stylesheet.rules[0].declarations[0].property, "color");
     }
@@ -532,7 +581,11 @@ mod tests {
         let stylesheet = parser.parse(css).unwrap();
 
         assert_eq!(stylesheet.rules.len(), 1);
-        assert!(stylesheet.rules[0].selectors[0].classes.contains(&"container".to_string()));
+        assert!(
+            stylesheet.rules[0].selectors[0]
+                .classes
+                .contains(&"container".to_string())
+        );
     }
 
     #[test]
@@ -542,7 +595,10 @@ mod tests {
         let stylesheet = parser.parse(css).unwrap();
 
         assert_eq!(stylesheet.rules.len(), 1);
-        assert_eq!(stylesheet.rules[0].selectors[0].id, Some("main".to_string()));
+        assert_eq!(
+            stylesheet.rules[0].selectors[0].id,
+            Some("main".to_string())
+        );
     }
 
     #[test]
@@ -571,4 +627,3 @@ mod tests {
         }
     }
 }
-

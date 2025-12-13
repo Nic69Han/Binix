@@ -52,4 +52,3 @@ pub mod performance_targets {
     /// Target battery improvement (%)
     pub const BATTERY_IMPROVEMENT_PERCENT: u8 = 20;
 }
-

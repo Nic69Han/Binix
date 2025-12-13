@@ -5,10 +5,10 @@ use crate::utils::Result;
 use html5ever::parse_document;
 use html5ever::tendril::{StrTendril, TendrilSink};
 use html5ever::tree_builder::TreeBuilderOpts;
-use html5ever::{local_name, namespace_url, ns, ParseOpts, QualName};
+use html5ever::{ParseOpts, QualName, local_name, namespace_url, ns};
+use markup5ever::Attribute;
 use markup5ever::interface::tree_builder::NodeOrText;
 use markup5ever::interface::tree_builder::TreeSink;
-use markup5ever::Attribute;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -37,7 +37,10 @@ struct SinkNode {
 
 enum SinkNodeType {
     Document,
-    Element { name: String, attrs: HashMap<String, String> },
+    Element {
+        name: String,
+        attrs: HashMap<String, String>,
+    },
     Text(String),
     Comment(String),
     Doctype,
@@ -123,7 +126,10 @@ impl DomSink {
 impl TreeSink for DomSink {
     type Handle = Handle;
     type Output = Self;
-    type ElemName<'a> = &'a QualName where Self: 'a;
+    type ElemName<'a>
+        = &'a QualName
+    where
+        Self: 'a;
 
     fn finish(self) -> Self::Output {
         self
@@ -151,7 +157,12 @@ impl TreeSink for DomSink {
         DEFAULT_QNAME.get_or_init(|| QualName::new(None, ns!(html), local_name!("")))
     }
 
-    fn create_element(&self, name: QualName, attrs: Vec<Attribute>, _flags: html5ever::tree_builder::ElementFlags) -> Handle {
+    fn create_element(
+        &self,
+        name: QualName,
+        attrs: Vec<Attribute>,
+        _flags: html5ever::tree_builder::ElementFlags,
+    ) -> Handle {
         let mut attr_map = HashMap::new();
         for attr in attrs {
             attr_map.insert(attr.name.local.to_string(), attr.value.to_string());
@@ -192,14 +203,26 @@ impl TreeSink for DomSink {
                 qual_name_idx: None,
             }),
         };
-        self.nodes.borrow_mut()[parent.0].children.push(child_handle);
+        self.nodes.borrow_mut()[parent.0]
+            .children
+            .push(child_handle);
     }
 
-    fn append_based_on_parent_node(&self, _element: &Handle, prev: &Handle, child: NodeOrText<Handle>) {
+    fn append_based_on_parent_node(
+        &self,
+        _element: &Handle,
+        prev: &Handle,
+        child: NodeOrText<Handle>,
+    ) {
         self.append(prev, child);
     }
 
-    fn append_doctype_to_document(&self, _name: StrTendril, _public: StrTendril, _system: StrTendril) {
+    fn append_doctype_to_document(
+        &self,
+        _name: StrTendril,
+        _public: StrTendril,
+        _system: StrTendril,
+    ) {
         let doctype = self.new_handle(SinkNode {
             node_type: SinkNodeType::Doctype,
             children: Vec::new(),
@@ -232,7 +255,9 @@ impl TreeSink for DomSink {
                         qual_name_idx: None,
                     }),
                 };
-                self.nodes.borrow_mut()[idx].children.insert(pos, child_handle);
+                self.nodes.borrow_mut()[idx]
+                    .children
+                    .insert(pos, child_handle);
                 return;
             }
         }
@@ -241,9 +266,13 @@ impl TreeSink for DomSink {
     fn add_attrs_if_missing(&self, target: &Handle, attrs: Vec<Attribute>) {
         let mut nodes = self.nodes.borrow_mut();
         if let Some(node) = nodes.get_mut(target.0) {
-            if let SinkNodeType::Element { attrs: existing, .. } = &mut node.node_type {
+            if let SinkNodeType::Element {
+                attrs: existing, ..
+            } = &mut node.node_type
+            {
                 for attr in attrs {
-                    existing.entry(attr.name.local.to_string())
+                    existing
+                        .entry(attr.name.local.to_string())
                         .or_insert_with(|| attr.value.to_string());
                 }
             }
@@ -326,14 +355,18 @@ mod tests {
     #[test]
     fn test_parse_with_attributes() {
         let parser = HtmlParser::new();
-        let doc = parser.parse(r#"<div id="main" class="container">Content</div>"#).unwrap();
+        let doc = parser
+            .parse(r#"<div id="main" class="container">Content</div>"#)
+            .unwrap();
         assert!(!doc.root.children.is_empty());
     }
 
     #[test]
     fn test_parse_nested_elements() {
         let parser = HtmlParser::new();
-        let doc = parser.parse(r#"
+        let doc = parser
+            .parse(
+                r#"
             <html>
                 <head><title>Test</title></head>
                 <body>
@@ -343,7 +376,9 @@ mod tests {
                     </div>
                 </body>
             </html>
-        "#).unwrap();
+        "#,
+            )
+            .unwrap();
         assert!(!doc.root.children.is_empty());
     }
 

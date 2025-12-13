@@ -238,4 +238,3 @@ mod tests {
         assert!(profiler.entries().is_empty());
     }
 }
-

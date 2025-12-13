@@ -86,4 +86,3 @@ impl Default for Window {
         Self::new()
     }
 }
-

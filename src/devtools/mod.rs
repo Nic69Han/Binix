@@ -88,4 +88,3 @@ mod tests {
         assert!(!devtools.is_enabled());
     }
 }
-

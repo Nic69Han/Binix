@@ -1,6 +1,6 @@
 //! HTTP request types
 
-use crate::utils::{error::NetworkError, Result};
+use crate::utils::{Result, error::NetworkError};
 use std::collections::HashMap;
 
 /// HTTP methods
@@ -82,4 +82,3 @@ impl Request {
         self.body.as_deref()
     }
 }
-

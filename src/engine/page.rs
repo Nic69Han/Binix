@@ -44,4 +44,3 @@ impl Page {
         (self.frame.width, self.frame.height)
     }
 }
-

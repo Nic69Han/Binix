@@ -186,4 +186,3 @@ mod tests {
         assert!(sri.verify(b"any content"));
     }
 }
-

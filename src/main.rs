@@ -17,7 +17,10 @@ fn main() {
 }
 
 fn run_cli_mode() {
-    println!("🚀 {} v{} - Ultra-High-Performance Web Browser", NAME, VERSION);
+    println!(
+        "🚀 {} v{} - Ultra-High-Performance Web Browser",
+        NAME, VERSION
+    );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     // Initialize the browser engine
@@ -25,9 +28,18 @@ fn run_cli_mode() {
 
     println!("✅ Browser engine initialized");
     println!("📊 Performance targets:");
-    println!("   • Page load: < {}ms", binix::performance_targets::PAGE_LOAD_MS);
-    println!("   • Memory per tab: < {}MB", binix::performance_targets::MAX_TAB_MEMORY_MB);
-    println!("   • Memory reduction: {}% vs Chrome", binix::performance_targets::MEMORY_REDUCTION_PERCENT);
+    println!(
+        "   • Page load: < {}ms",
+        binix::performance_targets::PAGE_LOAD_MS
+    );
+    println!(
+        "   • Memory per tab: < {}MB",
+        binix::performance_targets::MAX_TAB_MEMORY_MB
+    );
+    println!(
+        "   • Memory reduction: {}% vs Chrome",
+        binix::performance_targets::MEMORY_REDUCTION_PERCENT
+    );
 
     println!("\n🔧 CLI mode - use without --cli flag for GUI");
 }

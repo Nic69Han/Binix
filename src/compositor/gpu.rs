@@ -1,9 +1,8 @@
 //! GPU backend using wgpu for hardware-accelerated rendering
 
 use wgpu::{
-    Adapter, Device, Instance, Queue,
-    TextureFormat, TextureUsages, TextureView,
-    Buffer, BufferUsages, RequestDeviceError,
+    Adapter, Buffer, BufferUsages, Device, Instance, Queue, RequestDeviceError, TextureFormat,
+    TextureUsages, TextureView,
 };
 
 /// GPU rendering context
@@ -35,7 +34,8 @@ impl GpuContext {
     /// Initialize the GPU context (async)
     pub async fn initialize(&mut self) -> Result<(), GpuError> {
         // Request adapter
-        let adapter = self.instance
+        let adapter = self
+            .instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
@@ -225,4 +225,3 @@ mod tests {
         assert_eq!(renderer.render_target.height, 1080);
     }
 }
-

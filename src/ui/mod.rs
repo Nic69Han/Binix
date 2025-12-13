@@ -5,12 +5,12 @@ mod events;
 mod tab;
 mod window;
 
-pub use app::{run, BrowserApp};
+pub use app::{BrowserApp, run};
 pub use events::{
     Event, EventData, EventDispatcher, EventHandler, EventQueue, EventType, KeyboardEvent,
     Modifiers, MouseButton, MouseEvent, ScrollEvent, TouchEvent, TouchPoint,
 };
-pub use tab::{Tab, TabId, TabManager, PageContent, RenderElement, ElementKind};
+pub use tab::{ElementKind, PageContent, RenderElement, Tab, TabId, TabManager};
 pub use window::Window;
 
 /// UI configuration
@@ -40,4 +40,3 @@ pub enum Theme {
     Dark,
     System,
 }
-

@@ -1,6 +1,6 @@
 //! Main browser application using eframe/egui
 
-use super::{TabManager, Theme, UiConfig, ElementKind};
+use super::{ElementKind, TabManager, Theme, UiConfig};
 use eframe::egui;
 
 /// Main browser application
@@ -72,7 +72,12 @@ impl BrowserApp {
     /// Render the tab bar
     fn render_tab_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let tabs: Vec<_> = self.tabs.tabs().iter().map(|t| (t.id(), t.title().to_string())).collect();
+            let tabs: Vec<_> = self
+                .tabs
+                .tabs()
+                .iter()
+                .map(|t| (t.id(), t.title().to_string()))
+                .collect();
             let active = self.tabs.active_tab().map(|t| t.id());
 
             for (id, title) in tabs {
@@ -83,12 +88,11 @@ impl BrowserApp {
                     title
                 };
 
-                let button = egui::Button::new(&text)
-                    .fill(if is_active {
-                        ui.style().visuals.selection.bg_fill
-                    } else {
-                        ui.style().visuals.widgets.inactive.bg_fill
-                    });
+                let button = egui::Button::new(&text).fill(if is_active {
+                    ui.style().visuals.selection.bg_fill
+                } else {
+                    ui.style().visuals.widgets.inactive.bg_fill
+                });
 
                 if ui.add(button).clicked() {
                     self.tabs.set_active(id);
@@ -170,7 +174,10 @@ impl BrowserApp {
                                 ui.label(&element.text);
                             }
                             ElementKind::Link => {
-                                let link = ui.link(egui::RichText::new(&element.text).color(egui::Color32::from_rgb(0, 102, 204)));
+                                let link = ui.link(
+                                    egui::RichText::new(&element.text)
+                                        .color(egui::Color32::from_rgb(0, 102, 204)),
+                                );
                                 if link.clicked() {
                                     if let Some(href) = &element.href {
                                         self.url_input = href.clone();
@@ -232,13 +239,22 @@ impl BrowserApp {
                 ui.heading("Appearance");
                 ui.horizontal(|ui| {
                     ui.label("Theme:");
-                    if ui.selectable_label(self.config.theme == Theme::Light, "Light").clicked() {
+                    if ui
+                        .selectable_label(self.config.theme == Theme::Light, "Light")
+                        .clicked()
+                    {
                         self.config.theme = Theme::Light;
                     }
-                    if ui.selectable_label(self.config.theme == Theme::Dark, "Dark").clicked() {
+                    if ui
+                        .selectable_label(self.config.theme == Theme::Dark, "Dark")
+                        .clicked()
+                    {
                         self.config.theme = Theme::Dark;
                     }
-                    if ui.selectable_label(self.config.theme == Theme::System, "System").clicked() {
+                    if ui
+                        .selectable_label(self.config.theme == Theme::System, "System")
+                        .clicked()
+                    {
                         self.config.theme = Theme::System;
                     }
                 });
@@ -249,7 +265,10 @@ impl BrowserApp {
 
                 ui.add_space(10.0);
                 ui.heading("Developer");
-                if ui.checkbox(&mut self.show_devtools, "Show Developer Tools").changed() {
+                if ui
+                    .checkbox(&mut self.show_devtools, "Show Developer Tools")
+                    .changed()
+                {
                     // Toggle devtools
                 }
             });
@@ -352,5 +371,3 @@ mod tests {
         assert_eq!(config.default_zoom, 1.0);
     }
 }
-
-

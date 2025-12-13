@@ -97,19 +97,19 @@ impl ContentSecurityPolicy {
     /// Parse CSP from header string
     pub fn parse(header: &str) -> Self {
         let mut csp = Self::new();
-        
+
         for directive_str in header.split(';') {
             let parts: Vec<&str> = directive_str.trim().split_whitespace().collect();
             if parts.is_empty() {
                 continue;
             }
-            
+
             if let Some(directive) = CspDirective::from_str(parts[0]) {
                 let sources: HashSet<String> = parts[1..].iter().map(|s| s.to_string()).collect();
                 csp.directives.insert(directive, sources);
             }
         }
-        
+
         csp
     }
 
@@ -125,12 +125,12 @@ impl ContentSecurityPolicy {
         if let Some(sources) = self.directives.get(&directive) {
             return self.source_matches(sources, source);
         }
-        
+
         // Fall back to default-src
         if let Some(sources) = self.directives.get(&CspDirective::DefaultSrc) {
             return self.source_matches(sources, source);
         }
-        
+
         // No policy means allow
         true
     }
@@ -154,7 +154,12 @@ impl ContentSecurityPolicy {
     }
 
     /// Record a violation
-    pub fn record_violation(&mut self, directive: CspDirective, blocked_uri: &str, document_uri: &str) {
+    pub fn record_violation(
+        &mut self,
+        directive: CspDirective,
+        blocked_uri: &str,
+        document_uri: &str,
+    ) {
         self.violations.push(CspViolation {
             directive,
             blocked_uri: blocked_uri.to_string(),
@@ -191,13 +196,18 @@ mod tests {
 
     #[test]
     fn test_csp_directive_from_str() {
-        assert_eq!(CspDirective::from_str("script-src"), Some(CspDirective::ScriptSrc));
+        assert_eq!(
+            CspDirective::from_str("script-src"),
+            Some(CspDirective::ScriptSrc)
+        );
         assert_eq!(CspDirective::from_str("invalid"), None);
     }
 
     #[test]
     fn test_csp_parse() {
-        let csp = ContentSecurityPolicy::parse("default-src 'self'; script-src 'self' https://cdn.example.com");
+        let csp = ContentSecurityPolicy::parse(
+            "default-src 'self'; script-src 'self' https://cdn.example.com",
+        );
         assert!(csp.allows(CspDirective::DefaultSrc, "self"));
     }
 
@@ -226,8 +236,11 @@ mod tests {
     #[test]
     fn test_csp_record_violation() {
         let mut csp = ContentSecurityPolicy::new();
-        csp.record_violation(CspDirective::ScriptSrc, "https://evil.com/script.js", "https://example.com");
+        csp.record_violation(
+            CspDirective::ScriptSrc,
+            "https://evil.com/script.js",
+            "https://example.com",
+        );
         assert_eq!(csp.violations().len(), 1);
     }
 }
-

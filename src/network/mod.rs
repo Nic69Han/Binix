@@ -46,4 +46,3 @@ impl Default for NetworkStack {
         Self::new()
     }
 }
-

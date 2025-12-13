@@ -53,7 +53,12 @@ impl CorsRequest {
 
     /// Check if header is a simple header
     fn is_simple_header(header: &str) -> bool {
-        let simple_headers = ["accept", "accept-language", "content-language", "content-type"];
+        let simple_headers = [
+            "accept",
+            "accept-language",
+            "content-language",
+            "content-type",
+        ];
         simple_headers.contains(&header.to_lowercase().as_str())
     }
 }
@@ -209,12 +214,11 @@ mod tests {
         let mut policy = CorsPolicy::new();
         policy.allow_origin("https://trusted.com");
         policy.allow_method("GET");
-        
+
         let allowed = CorsRequest::new("https://trusted.com", "GET");
         let blocked = CorsRequest::new("https://untrusted.com", "GET");
-        
+
         assert_eq!(policy.check(&allowed), CorsResult::Allowed);
         assert!(matches!(policy.check(&blocked), CorsResult::Blocked(_)));
     }
 }
-

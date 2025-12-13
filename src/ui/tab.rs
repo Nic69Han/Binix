@@ -1,7 +1,7 @@
 //! Tab management
 
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{channel, Receiver, Sender};
 
 /// Unique tab identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -114,7 +114,8 @@ impl Tab {
         let url_str: String = url.into();
 
         // Normalize URL
-        let normalized_url = if !url_str.starts_with("http://") && !url_str.starts_with("https://") {
+        let normalized_url = if !url_str.starts_with("http://") && !url_str.starts_with("https://")
+        {
             format!("https://{}", url_str)
         } else {
             url_str
@@ -175,29 +176,35 @@ fn fetch_and_parse(url: &str) -> PageContent {
 
     let client = match client {
         Ok(c) => c,
-        Err(e) => return PageContent {
-            title: "Error".to_string(),
-            elements: vec![],
-            error: Some(format!("Failed to create client: {}", e)),
-        },
+        Err(e) => {
+            return PageContent {
+                title: "Error".to_string(),
+                elements: vec![],
+                error: Some(format!("Failed to create client: {}", e)),
+            };
+        }
     };
 
     let response = match client.get(url).send() {
         Ok(r) => r,
-        Err(e) => return PageContent {
-            title: "Error".to_string(),
-            elements: vec![],
-            error: Some(format!("Failed to fetch: {}", e)),
-        },
+        Err(e) => {
+            return PageContent {
+                title: "Error".to_string(),
+                elements: vec![],
+                error: Some(format!("Failed to fetch: {}", e)),
+            };
+        }
     };
 
     let html = match response.text() {
         Ok(t) => t,
-        Err(e) => return PageContent {
-            title: "Error".to_string(),
-            elements: vec![],
-            error: Some(format!("Failed to read response: {}", e)),
-        },
+        Err(e) => {
+            return PageContent {
+                title: "Error".to_string(),
+                elements: vec![],
+                error: Some(format!("Failed to read response: {}", e)),
+            };
+        }
     };
 
     // Parse HTML and extract content
@@ -207,7 +214,7 @@ fn fetch_and_parse(url: &str) -> PageContent {
 /// Parse HTML to renderable content
 fn parse_html_to_content(html: &str, _url: &str) -> PageContent {
     use html5ever::tendril::TendrilSink;
-    use html5ever::{parse_document, ParseOpts};
+    use html5ever::{ParseOpts, parse_document};
     use markup5ever_rcdom::RcDom;
 
     let opts = ParseOpts::default();
@@ -251,7 +258,8 @@ fn extract_content(
             let attrs = attrs.borrow();
 
             // Extract href for links
-            let href = attrs.iter()
+            let href = attrs
+                .iter()
                 .find(|a| a.name.local.as_ref() == "href")
                 .map(|a| a.value.to_string());
 
@@ -475,4 +483,3 @@ impl Default for TabManager {
         Self::new()
     }
 }
-

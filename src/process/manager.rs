@@ -119,7 +119,12 @@ impl ProcessManager {
     pub fn spawn_renderer_for_site(&mut self, origin: &str) -> u32 {
         // Check if we already have a renderer for this site
         if let Some(&id) = self.site_to_process.get(origin) {
-            if self.processes.get(&id).map(|p| p.state == ProcessState::Running).unwrap_or(false) {
+            if self
+                .processes
+                .get(&id)
+                .map(|p| p.state == ProcessState::Running)
+                .unwrap_or(false)
+            {
                 return id;
             }
         }
@@ -193,7 +198,8 @@ impl ProcessManager {
 
     /// Clean up terminated processes
     pub fn cleanup(&mut self) {
-        self.processes.retain(|_, p| p.state != ProcessState::Terminated);
+        self.processes
+            .retain(|_, p| p.state != ProcessState::Terminated);
     }
 }
 
@@ -238,7 +244,10 @@ mod tests {
         let mut manager = ProcessManager::new();
         let id = manager.spawn(ProcessType::Renderer);
         manager.terminate(id);
-        assert_eq!(manager.get_process(id).unwrap().state, ProcessState::Terminated);
+        assert_eq!(
+            manager.get_process(id).unwrap().state,
+            ProcessState::Terminated
+        );
     }
 
     #[test]
@@ -260,4 +269,3 @@ mod tests {
         assert_eq!(manager.process_count(), 0);
     }
 }
-

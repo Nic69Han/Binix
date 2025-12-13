@@ -110,4 +110,3 @@ impl From<JsError> for BinixError {
 
 /// Convenience Result type for Binix operations
 pub type Result<T> = std::result::Result<T, BinixError>;
-

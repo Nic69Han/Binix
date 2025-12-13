@@ -93,7 +93,7 @@ impl RendererProcess {
         if let Some(doc) = self.documents.get_mut(&doc_id) {
             doc.ready_state = ready_state;
         }
-        
+
         self.state = match ready_state {
             ReadyState::Loading => RendererState::Loading,
             ReadyState::Interactive => RendererState::Interactive,
@@ -171,8 +171,13 @@ mod tests {
 
     #[test]
     fn test_extract_origin() {
-        assert_eq!(extract_origin("https://example.com/page"), Some("https://example.com".to_string()));
-        assert_eq!(extract_origin("http://localhost:8080/api"), Some("http://localhost:8080".to_string()));
+        assert_eq!(
+            extract_origin("https://example.com/page"),
+            Some("https://example.com".to_string())
+        );
+        assert_eq!(
+            extract_origin("http://localhost:8080/api"),
+            Some("http://localhost:8080".to_string())
+        );
     }
 }
-

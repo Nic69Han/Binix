@@ -125,4 +125,3 @@ impl Default for Document {
         Self::new()
     }
 }
-

@@ -134,7 +134,12 @@ impl NetworkInspector {
     }
 
     /// Start tracking a new request
-    pub fn start_request(&mut self, url: &str, method: HttpMethod, resource_type: ResourceType) -> u64 {
+    pub fn start_request(
+        &mut self,
+        url: &str,
+        method: HttpMethod,
+        resource_type: ResourceType,
+    ) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         let request = NetworkRequest::new(id, url, method, resource_type);
@@ -159,7 +164,9 @@ impl NetworkInspector {
     /// Get all requests
     pub fn requests(&self) -> impl Iterator<Item = &NetworkRequest> {
         self.requests.iter().filter(|r| {
-            self.filter_type.map(|f| r.resource_type == f).unwrap_or(true)
+            self.filter_type
+                .map(|f| r.resource_type == f)
+                .unwrap_or(true)
         })
     }
 
@@ -208,14 +215,24 @@ mod tests {
 
     #[test]
     fn test_network_request_creation() {
-        let req = NetworkRequest::new(1, "https://example.com", HttpMethod::Get, ResourceType::Document);
+        let req = NetworkRequest::new(
+            1,
+            "https://example.com",
+            HttpMethod::Get,
+            ResourceType::Document,
+        );
         assert_eq!(req.status, RequestStatus::Pending);
         assert_eq!(req.url, "https://example.com");
     }
 
     #[test]
     fn test_network_request_complete() {
-        let mut req = NetworkRequest::new(1, "https://example.com", HttpMethod::Get, ResourceType::Document);
+        let mut req = NetworkRequest::new(
+            1,
+            "https://example.com",
+            HttpMethod::Get,
+            ResourceType::Document,
+        );
         req.complete(200, 1024);
         assert_eq!(req.status, RequestStatus::Complete);
         assert_eq!(req.status_code, Some(200));
@@ -225,7 +242,11 @@ mod tests {
     #[test]
     fn test_network_inspector_track() {
         let mut inspector = NetworkInspector::new();
-        let id = inspector.start_request("https://example.com", HttpMethod::Get, ResourceType::Document);
+        let id = inspector.start_request(
+            "https://example.com",
+            HttpMethod::Get,
+            ResourceType::Document,
+        );
         assert_eq!(inspector.request_count(), 1);
         inspector.complete_request(id, 200, 512);
         let req = inspector.get_request(id).unwrap();
@@ -235,7 +256,11 @@ mod tests {
     #[test]
     fn test_network_inspector_fail() {
         let mut inspector = NetworkInspector::new();
-        let id = inspector.start_request("https://example.com", HttpMethod::Get, ResourceType::Document);
+        let id = inspector.start_request(
+            "https://example.com",
+            HttpMethod::Get,
+            ResourceType::Document,
+        );
         inspector.fail_request(id, "Connection refused");
         let req = inspector.get_request(id).unwrap();
         assert_eq!(req.status, RequestStatus::Failed);
@@ -247,4 +272,3 @@ mod tests {
         assert_eq!(HttpMethod::Post.as_str(), "POST");
     }
 }
-

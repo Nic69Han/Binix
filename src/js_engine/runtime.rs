@@ -1,8 +1,8 @@
 //! JavaScript runtime implementation using Boa engine
 
 use super::{JsCallback, JsValue};
-use crate::utils::{error::JsError, Result};
-use boa_engine::{Context, Source, JsValue as BoaJsValue};
+use crate::utils::{Result, error::JsError};
+use boa_engine::{Context, JsValue as BoaJsValue, Source};
 use std::collections::HashMap;
 
 /// JavaScript runtime context using Boa engine
@@ -134,7 +134,9 @@ mod tests {
     #[test]
     fn test_eval_functions() {
         let mut runtime = JsRuntime::new();
-        runtime.execute("function add(a, b) { return a + b; }").unwrap();
+        runtime
+            .execute("function add(a, b) { return a + b; }")
+            .unwrap();
         assert_eq!(runtime.eval("add(3, 4)").unwrap(), JsValue::Number(7.0));
     }
 
@@ -161,4 +163,3 @@ mod tests {
         );
     }
 }
-

@@ -77,12 +77,9 @@ impl WasmInstance {
             BinixError::JavaScript(JsError::Wasm("Failed to lock WASM store".to_string()))
         })?;
 
-        let func = self
-            .instance
-            .get_func(&mut *store, name)
-            .ok_or_else(|| {
-                BinixError::JavaScript(JsError::Wasm(format!("Function '{}' not found", name)))
-            })?;
+        let func = self.instance.get_func(&mut *store, name).ok_or_else(|| {
+            BinixError::JavaScript(JsError::Wasm(format!("Function '{}' not found", name)))
+        })?;
 
         let params: Vec<Val> = args.iter().cloned().map(Val::from).collect();
         let func_ty = func.ty(&*store);
@@ -93,10 +90,7 @@ impl WasmInstance {
             BinixError::JavaScript(JsError::Wasm(format!("WASM call error: {}", e)))
         })?;
 
-        results
-            .into_iter()
-            .map(WasmValue::try_from)
-            .collect()
+        results.into_iter().map(WasmValue::try_from).collect()
     }
 
     /// Get memory export if available
@@ -251,11 +245,15 @@ mod tests {
         let instance = runtime.instantiate(&module).unwrap();
 
         // Test add
-        let result = instance.call("add", &[WasmValue::I32(5), WasmValue::I32(3)]).unwrap();
+        let result = instance
+            .call("add", &[WasmValue::I32(5), WasmValue::I32(3)])
+            .unwrap();
         assert_eq!(result, vec![WasmValue::I32(8)]);
 
         // Test multiply
-        let result = instance.call("multiply", &[WasmValue::I32(4), WasmValue::I32(7)]).unwrap();
+        let result = instance
+            .call("multiply", &[WasmValue::I32(4), WasmValue::I32(7)])
+            .unwrap();
         assert_eq!(result, vec![WasmValue::I32(28)]);
     }
 
@@ -315,4 +313,3 @@ mod tests {
         assert_eq!(result, vec![WasmValue::I32(55)]);
     }
 }
-

@@ -1,7 +1,7 @@
 //! HTTP client implementation using reqwest
 
-use super::{request::Method, Request, Response};
-use crate::utils::{error::NetworkError, Result};
+use super::{Request, Response, request::Method};
+use crate::utils::{Result, error::NetworkError};
 use reqwest::Client;
 use std::time::Duration;
 
@@ -139,8 +139,9 @@ mod tests {
     #[tokio::test]
     async fn test_connection_error() {
         let client = NetworkClient::with_timeout(Duration::from_millis(100));
-        let result = client.get("https://invalid.domain.that.does.not.exist/").await;
+        let result = client
+            .get("https://invalid.domain.that.does.not.exist/")
+            .await;
         assert!(result.is_err());
     }
 }
-

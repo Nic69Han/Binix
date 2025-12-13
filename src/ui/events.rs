@@ -282,10 +282,7 @@ impl EventDispatcher {
     /// Add a global event listener
     pub fn add_listener(&mut self, event_type: EventType, handler: EventHandler, capture: bool) {
         let listener = EventListener { handler, capture };
-        self.listeners
-            .entry(event_type)
-            .or_default()
-            .push(listener);
+        self.listeners.entry(event_type).or_default().push(listener);
     }
 
     /// Add an event listener for a specific target
@@ -481,7 +478,14 @@ mod tests {
 
     #[test]
     fn test_keyboard_event() {
-        let event = Event::key_down("a", "KeyA", Modifiers { ctrl: true, ..Default::default() });
+        let event = Event::key_down(
+            "a",
+            "KeyA",
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(event.event_type, EventType::KeyDown);
         if let EventData::Keyboard(kbd) = &event.data {
             assert_eq!(kbd.key, "a");
@@ -520,4 +524,3 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 }
-

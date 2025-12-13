@@ -96,4 +96,3 @@ impl JavaScriptEngine for DefaultJsEngine {
         self.runtime.register_function(name, callback)
     }
 }
-

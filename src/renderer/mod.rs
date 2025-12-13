@@ -16,8 +16,8 @@ pub use dirty_tracking::{DirtyTracker, LayoutChange, Rect};
 pub use dom::{Document, ElementData, Node, NodeType};
 pub use html::HtmlParser;
 pub use layout::{LayoutBox, LayoutEngine};
-pub use layout_batch::{LayoutBatcher, BatchConfig, BatchResult};
-pub use streaming::{StreamingParser, ParserState, ParsedChunk};
+pub use layout_batch::{BatchConfig, BatchResult, LayoutBatcher};
+pub use streaming::{ParsedChunk, ParserState, StreamingParser};
 pub use style::StyleEngine;
 
 use crate::utils::Result;
@@ -73,4 +73,3 @@ impl RenderingEngine for DefaultRenderingEngine {
         self.layout_engine.compute(document)
     }
 }
-

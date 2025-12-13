@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use quinn::{ClientConfig, Endpoint, Connection, RecvStream, SendStream};
+use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream};
 use rustls::pki_types::{CertificateDer, ServerName};
 
 use crate::utils::error::{BinixError, NetworkError};
@@ -50,14 +50,14 @@ impl Http3Client {
     pub fn new(config: Http3Config) -> Result<Self, BinixError> {
         // Create client config with native certs
         let client_config = Self::create_client_config()?;
-        
+
         // Bind to any available port
         let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
         let mut endpoint = Endpoint::client(addr)
             .map_err(|e| BinixError::Network(NetworkError::ConnectionFailed(e.to_string())))?;
-        
+
         endpoint.set_default_client_config(client_config);
-        
+
         Ok(Self { endpoint, config })
     }
 
@@ -80,7 +80,7 @@ impl Http3Client {
 
         let client_config = ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
-                .map_err(|e| BinixError::Network(NetworkError::TlsError(e.to_string())))?
+                .map_err(|e| BinixError::Network(NetworkError::TlsError(e.to_string())))?,
         ));
 
         Ok(client_config)
@@ -93,14 +93,17 @@ impl Http3Client {
             .await
             .map_err(|e| BinixError::Network(NetworkError::DnsError(e.to_string())))?
             .next()
-            .ok_or_else(|| BinixError::Network(NetworkError::DnsError("No address found".to_string())))?;
-        
-        let connection = self.endpoint
+            .ok_or_else(|| {
+                BinixError::Network(NetworkError::DnsError("No address found".to_string()))
+            })?;
+
+        let connection = self
+            .endpoint
             .connect(socket_addr, host)
             .map_err(|e| BinixError::Network(NetworkError::ConnectionFailed(e.to_string())))?
             .await
             .map_err(|e| BinixError::Network(NetworkError::ConnectionFailed(e.to_string())))?;
-        
+
         Ok(Http3Connection { connection })
     }
 
@@ -166,4 +169,3 @@ mod tests {
         assert!(client.is_ok());
     }
 }
-

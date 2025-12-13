@@ -270,8 +270,8 @@ impl LayoutEngine {
                 DisplayType::Block
             }
             // Inline elements
-            "span" | "a" | "strong" | "em" | "b" | "i" | "u" | "code" | "small" | "sub"
-            | "sup" | "label" | "abbr" | "cite" | "q" => DisplayType::Inline,
+            "span" | "a" | "strong" | "em" | "b" | "i" | "u" | "code" | "small" | "sub" | "sup"
+            | "label" | "abbr" | "cite" | "q" => DisplayType::Inline,
             // Inline-block elements
             "img" | "button" | "input" | "select" | "textarea" => DisplayType::InlineBlock,
             // Hidden elements
@@ -374,8 +374,7 @@ impl LayoutEngine {
         // For text, calculate width based on content
         if let Some(ref text) = layout_box.text_content {
             let text_width = text.len() as f32 * self.font_metrics.char_width;
-            layout_box.dimensions.content.width =
-                text_width.min(containing_block.content.width);
+            layout_box.dimensions.content.width = text_width.min(containing_block.content.width);
             layout_box.dimensions.content.height =
                 self.font_metrics.size * self.font_metrics.line_height;
         } else {

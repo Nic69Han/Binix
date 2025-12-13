@@ -19,12 +19,22 @@ pub struct Rect {
 impl Rect {
     /// Create a new rectangle
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Create an empty rectangle
     pub fn empty() -> Self {
-        Self { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }
     }
 
     /// Check if rectangle is empty
@@ -274,4 +284,3 @@ mod tests {
         assert!(tracker.dirty_regions().is_empty());
     }
 }
-

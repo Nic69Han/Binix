@@ -103,9 +103,9 @@ impl LayoutBatcher {
         // Update stats
         self.stats.total_batches += 1;
         self.stats.total_changes += changes;
-        self.stats.changes_per_batch = 
+        self.stats.changes_per_batch =
             self.stats.total_changes as f32 / self.stats.total_batches as f32;
-        
+
         // Layouts saved = changes - 1 (we do one layout instead of many)
         if changes > 1 {
             self.stats.layouts_saved += changes - 1;
@@ -250,4 +250,3 @@ mod tests {
         assert!(batcher.is_empty());
     }
 }
-

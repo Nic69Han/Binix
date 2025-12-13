@@ -332,4 +332,3 @@ mod tests {
         assert_eq!(node.text_content(), Some("Hello"));
     }
 }
-

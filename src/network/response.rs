@@ -90,4 +90,3 @@ impl Response {
         self.headers.insert(key.into(), value.into());
     }
 }
-

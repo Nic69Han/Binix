@@ -1,8 +1,8 @@
 //! Inter-process communication
 
 use std::collections::HashMap;
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{channel, Sender, Receiver};
 
 /// IPC message types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +56,12 @@ impl IpcMessage {
 
     /// Create a navigate message
     pub fn navigate(source: u32, target: u32, url: &str) -> Self {
-        Self::new(IpcMessageType::Navigate, source, target, url.as_bytes().to_vec())
+        Self::new(
+            IpcMessageType::Navigate,
+            source,
+            target,
+            url.as_bytes().to_vec(),
+        )
     }
 
     /// Create a shutdown message
@@ -116,11 +121,7 @@ impl IpcChannel {
 
     /// Try to receive a message (non-blocking)
     pub fn try_recv(&self) -> Option<IpcMessage> {
-        self.receiver
-            .lock()
-            .ok()?
-            .try_recv()
-            .ok()
+        self.receiver.lock().ok()?.try_recv().ok()
     }
 
     /// Get channel ID
@@ -204,7 +205,10 @@ mod tests {
         let received = ch2.recv().unwrap();
 
         assert_eq!(received.msg_type, IpcMessageType::Navigate);
-        assert_eq!(received.payload_str(), Some("https://example.com".to_string()));
+        assert_eq!(
+            received.payload_str(),
+            Some("https://example.com".to_string())
+        );
     }
 
     #[test]
@@ -220,4 +224,3 @@ mod tests {
         assert!(ch2.try_recv().is_some());
     }
 }
-

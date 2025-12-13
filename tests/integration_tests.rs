@@ -1,5 +1,5 @@
 //! Integration tests for Binix browser engine
-//! 
+//!
 //! These tests verify the browser components work together correctly.
 
 use proptest::prelude::*;
@@ -56,9 +56,9 @@ mod performance_tests {
     #[ignore] // Enable when implementation is ready
     fn test_page_load_performance() {
         let start = Instant::now();
-        
+
         // TODO: Actual page load
-        
+
         let duration = start.elapsed();
         assert!(
             duration < Duration::from_millis(1500),
@@ -67,4 +67,3 @@ mod performance_tests {
         );
     }
 }
-
