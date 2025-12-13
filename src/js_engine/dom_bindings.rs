@@ -1,10 +1,51 @@
 //! DOM bindings for JavaScript
 //!
-//! Provides JavaScript access to the DOM tree.
+//! Provides JavaScript access to the DOM tree, including:
+//! - Element creation and manipulation
+//! - Event listeners
+//! - innerHTML/textContent
 
-use crate::renderer::{Document, Node};
+use crate::renderer::{Document, Node, NodeType, ElementData};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+/// Event listener callback type
+pub type EventCallback = Box<dyn Fn(&Event) + Send + Sync>;
+
+/// DOM Event
+#[derive(Debug, Clone)]
+pub struct Event {
+    /// Event type (e.g., "click", "input")
+    pub event_type: String,
+    /// Target node ID
+    pub target: NodeId,
+    /// Whether propagation was stopped
+    pub propagation_stopped: bool,
+    /// Whether default was prevented
+    pub default_prevented: bool,
+}
+
+impl Event {
+    /// Create a new event
+    pub fn new(event_type: &str, target: NodeId) -> Self {
+        Self {
+            event_type: event_type.to_string(),
+            target,
+            propagation_stopped: false,
+            default_prevented: false,
+        }
+    }
+
+    /// Stop event propagation
+    pub fn stop_propagation(&mut self) {
+        self.propagation_stopped = true;
+    }
+
+    /// Prevent default behavior
+    pub fn prevent_default(&mut self) {
+        self.default_prevented = true;
+    }
+}
 
 /// Unique identifier for DOM nodes in JavaScript
 pub type NodeId = u64;
@@ -17,6 +58,12 @@ pub struct DomBindings {
     next_node_id: u64,
     /// Map from node IDs to node paths (for retrieval)
     node_map: HashMap<NodeId, Vec<usize>>,
+    /// Pending nodes (created but not attached to DOM)
+    pending_nodes: HashMap<NodeId, Node>,
+    /// Event listeners: (node_id, event_type) -> callbacks
+    event_listeners: HashMap<(NodeId, String), Vec<usize>>,
+    /// Stored callbacks (indexed by ID)
+    callbacks: Vec<EventCallback>,
 }
 
 impl DomBindings {
@@ -26,6 +73,9 @@ impl DomBindings {
             document: Arc::new(Mutex::new(document)),
             next_node_id: 1,
             node_map: HashMap::new(),
+            pending_nodes: HashMap::new(),
+            event_listeners: HashMap::new(),
+            callbacks: Vec::new(),
         }
     }
 
@@ -119,6 +169,11 @@ impl DomBindings {
     pub fn create_element(&mut self, tag_name: &str) -> DomNode {
         let id = self.next_node_id;
         self.next_node_id += 1;
+
+        // Store the actual DOM node for later attachment
+        let node = Node::element(tag_name);
+        self.pending_nodes.insert(id, node);
+
         DomNode {
             id,
             tag_name: tag_name.to_string(),
@@ -130,6 +185,11 @@ impl DomBindings {
     pub fn create_text_node(&mut self, content: &str) -> DomNode {
         let id = self.next_node_id;
         self.next_node_id += 1;
+
+        // Store the actual DOM node
+        let node = Node::text(content);
+        self.pending_nodes.insert(id, node);
+
         DomNode {
             id,
             tag_name: "#text".to_string(),
@@ -137,7 +197,235 @@ impl DomBindings {
         }
     }
 
+    /// Append a child node to a parent
+    pub fn append_child(&mut self, parent_id: NodeId, child_id: NodeId) -> bool {
+        // Get the child node from pending or create a placeholder
+        let child_node = match self.pending_nodes.remove(&child_id) {
+            Some(node) => node,
+            None => return false, // Child not found
+        };
+
+        // If parent is in DOM, add child to DOM
+        if let Some(path) = self.node_map.get(&parent_id).cloned() {
+            if let Ok(mut doc) = self.document.lock() {
+                if let Some(parent) = Self::get_node_at_path_mut(&mut doc.root, &path) {
+                    parent.add_child(child_node);
+                    return true;
+                }
+            }
+        }
+
+        // If parent is pending, add child to pending parent
+        if let Some(parent) = self.pending_nodes.get_mut(&parent_id) {
+            parent.add_child(child_node);
+            return true;
+        }
+
+        false
+    }
+
+    /// Remove a child node from a parent
+    pub fn remove_child(&mut self, parent_id: NodeId, child_index: usize) -> bool {
+        if let Some(path) = self.node_map.get(&parent_id).cloned() {
+            if let Ok(mut doc) = self.document.lock() {
+                if let Some(parent) = Self::get_node_at_path_mut(&mut doc.root, &path) {
+                    if child_index < parent.children.len() {
+                        parent.children.remove(child_index);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Set innerHTML of an element
+    pub fn set_inner_html(&mut self, node_id: NodeId, html: &str) -> bool {
+        use crate::renderer::HtmlParser;
+
+        // Parse HTML fragment
+        let parser = HtmlParser::new();
+        let fragment = match parser.parse(&format!("<div>{}</div>", html)) {
+            Ok(doc) => doc,
+            Err(_) => return false,
+        };
+
+        // Get the parsed children
+        let new_children: Vec<Node> = if !fragment.root.children.is_empty() {
+            // Get children from the wrapper div
+            if let Some(first_child) = fragment.root.children.first() {
+                if !first_child.children.is_empty() {
+                    first_child.children.clone()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Replace children of target node
+        if let Some(path) = self.node_map.get(&node_id).cloned() {
+            if let Ok(mut doc) = self.document.lock() {
+                if let Some(node) = Self::get_node_at_path_mut(&mut doc.root, &path) {
+                    node.children = new_children;
+                    return true;
+                }
+            }
+        }
+
+        // Check pending nodes
+        if let Some(node) = self.pending_nodes.get_mut(&node_id) {
+            node.children = new_children;
+            return true;
+        }
+
+        false
+    }
+
+    /// Get textContent of an element
+    pub fn get_text_content(&self, node_id: NodeId) -> Option<String> {
+        if let Some(path) = self.node_map.get(&node_id) {
+            if let Ok(doc) = self.document.lock() {
+                if let Some(node) = Self::get_node_at_path(&doc.root, path) {
+                    return Some(Self::collect_text(node));
+                }
+            }
+        }
+
+        if let Some(node) = self.pending_nodes.get(&node_id) {
+            return Some(Self::collect_text(node));
+        }
+
+        None
+    }
+
+    /// Set textContent of an element
+    pub fn set_text_content(&mut self, node_id: NodeId, content: &str) -> bool {
+        let text_node = Node::text(content);
+
+        if let Some(path) = self.node_map.get(&node_id).cloned() {
+            if let Ok(mut doc) = self.document.lock() {
+                if let Some(node) = Self::get_node_at_path_mut(&mut doc.root, &path) {
+                    node.children = vec![text_node];
+                    return true;
+                }
+            }
+        }
+
+        if let Some(node) = self.pending_nodes.get_mut(&node_id) {
+            node.children = vec![text_node];
+            return true;
+        }
+
+        false
+    }
+
+    /// Set an attribute on an element
+    pub fn set_attribute(&mut self, node_id: NodeId, name: &str, value: &str) -> bool {
+        if let Some(path) = self.node_map.get(&node_id).cloned() {
+            if let Ok(mut doc) = self.document.lock() {
+                if let Some(node) = Self::get_node_at_path_mut(&mut doc.root, &path) {
+                    if let NodeType::Element(ref mut data) = node.node_type {
+                        data.set_attribute(name, value);
+                        return true;
+                    }
+                }
+            }
+        }
+
+        if let Some(node) = self.pending_nodes.get_mut(&node_id) {
+            if let NodeType::Element(ref mut data) = node.node_type {
+                data.set_attribute(name, value);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Get an attribute from an element
+    pub fn get_attribute(&self, node_id: NodeId, name: &str) -> Option<String> {
+        if let Some(path) = self.node_map.get(&node_id) {
+            if let Ok(doc) = self.document.lock() {
+                if let Some(node) = Self::get_node_at_path(&doc.root, path) {
+                    if let Some(elem) = node.as_element() {
+                        return elem.get_attribute(name).cloned();
+                    }
+                }
+            }
+        }
+
+        if let Some(node) = self.pending_nodes.get(&node_id) {
+            if let Some(elem) = node.as_element() {
+                return elem.get_attribute(name).cloned();
+            }
+        }
+
+        None
+    }
+
+    /// Add an event listener
+    pub fn add_event_listener(&mut self, node_id: NodeId, event_type: &str, callback: EventCallback) {
+        let callback_id = self.callbacks.len();
+        self.callbacks.push(callback);
+
+        let key = (node_id, event_type.to_string());
+        self.event_listeners.entry(key).or_default().push(callback_id);
+    }
+
+    /// Remove event listeners for a node and event type
+    pub fn remove_event_listeners(&mut self, node_id: NodeId, event_type: &str) {
+        let key = (node_id, event_type.to_string());
+        self.event_listeners.remove(&key);
+    }
+
+    /// Dispatch an event to listeners
+    pub fn dispatch_event(&self, event: &Event) {
+        let key = (event.target, event.event_type.clone());
+        if let Some(callback_ids) = self.event_listeners.get(&key) {
+            for &id in callback_ids {
+                if let Some(callback) = self.callbacks.get(id) {
+                    callback(event);
+                }
+            }
+        }
+    }
+
     // Private helper methods
+
+    /// Get node at path (immutable)
+    fn get_node_at_path<'a>(root: &'a Node, path: &[usize]) -> Option<&'a Node> {
+        let mut current = root;
+        for &index in path {
+            current = current.children.get(index)?;
+        }
+        Some(current)
+    }
+
+    /// Get node at path (mutable)
+    fn get_node_at_path_mut<'a>(root: &'a mut Node, path: &[usize]) -> Option<&'a mut Node> {
+        let mut current = root;
+        for &index in path {
+            current = current.children.get_mut(index)?;
+        }
+        Some(current)
+    }
+
+    /// Collect all text from a node tree
+    fn collect_text(node: &Node) -> String {
+        match &node.node_type {
+            NodeType::Text(content) => content.clone(),
+            _ => {
+                node.children.iter()
+                    .map(Self::collect_text)
+                    .collect::<Vec<_>>()
+                    .join("")
+            }
+        }
+    }
 
     fn allocate_node_id(&mut self, path: Vec<usize>) -> NodeId {
         let id = self.next_node_id;

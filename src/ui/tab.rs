@@ -2353,25 +2353,39 @@ mod tests {
         let rules = parse_css_rules(css);
 
         assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0].selector.tag, Some("h1".to_string()));
+        // First rule: h1 selector
+        assert!(rules[0].selector.matches("h1", None, &[]));
         assert_eq!(rules[0].properties.get("color"), Some(&"red".to_string()));
         assert_eq!(rules[0].properties.get("font-size"), Some(&"24px".to_string()));
 
-        assert!(rules[1].selector.classes.contains(&"title".to_string()));
+        // Second rule: .title selector
+        assert!(rules[1].selector.matches("div", None, &["title".to_string()]));
         assert_eq!(rules[1].properties.get("font-weight"), Some(&"bold".to_string()));
     }
 
     #[test]
     fn test_css_selector_matching() {
         let selector = parse_css_selector("div.container#main");
-        assert_eq!(selector.tag, Some("div".to_string()));
-        assert_eq!(selector.id, Some("main".to_string()));
-        assert!(selector.classes.contains(&"container".to_string()));
 
         // Test matching
         assert!(selector.matches("div", Some("main"), &["container".to_string()]));
         assert!(!selector.matches("div", Some("other"), &["container".to_string()]));
         assert!(!selector.matches("span", Some("main"), &["container".to_string()]));
+    }
+
+    #[test]
+    fn test_css_combinator_parsing() {
+        // Test descendant selector
+        let selector = parse_css_selector("ul li");
+        assert_eq!(selector.parts.len(), 2);
+
+        // Test child selector
+        let selector = parse_css_selector("ul > li");
+        assert_eq!(selector.parts.len(), 2);
+
+        // Test adjacent sibling selector
+        let selector = parse_css_selector("h1 + p");
+        assert_eq!(selector.parts.len(), 2);
     }
 
     #[test]
