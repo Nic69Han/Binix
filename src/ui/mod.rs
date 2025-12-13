@@ -10,7 +10,7 @@ pub use events::{
     Event, EventData, EventDispatcher, EventHandler, EventQueue, EventType, KeyboardEvent,
     Modifiers, MouseButton, MouseEvent, ScrollEvent, TouchEvent, TouchPoint,
 };
-pub use tab::{Tab, TabId, TabManager};
+pub use tab::{Tab, TabId, TabManager, PageContent, RenderElement, ElementKind};
 pub use window::Window;
 
 /// UI configuration

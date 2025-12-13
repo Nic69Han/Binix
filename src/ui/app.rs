@@ -1,6 +1,6 @@
 //! Main browser application using eframe/egui
 
-use super::{TabManager, Theme, UiConfig};
+use super::{TabManager, Theme, UiConfig, ElementKind};
 use eframe::egui;
 
 /// Main browser application
@@ -113,22 +113,91 @@ impl BrowserApp {
 
     /// Render the content area
     fn render_content(&mut self, ui: &mut egui::Ui) {
+        // Poll for content updates
+        if let Some(tab) = self.tabs.active_tab_mut() {
+            tab.poll_content();
+        }
+
         if let Some(tab) = self.tabs.active_tab() {
             if tab.is_loading() {
                 ui.centered_and_justified(|ui| {
-                    ui.spinner();
+                    ui.vertical_centered(|ui| {
+                        ui.spinner();
+                        ui.label("Loading...");
+                    });
                 });
             } else if tab.url().is_empty() {
                 self.render_new_tab_page(ui);
             } else {
-                // TODO: Render actual page content
-                ui.centered_and_justified(|ui| {
-                    ui.label(format!("Page: {}", tab.url()));
-                });
+                // Render actual page content
+                let content = tab.content();
+
+                if let Some(error) = &content.error {
+                    ui.colored_label(egui::Color32::RED, format!("Error: {}", error));
+                } else {
+                    self.render_page_content(ui, &content);
+                }
             }
         } else {
             self.render_new_tab_page(ui);
         }
+    }
+
+    /// Render parsed HTML content
+    fn render_page_content(&mut self, ui: &mut egui::Ui, content: &super::PageContent) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+
+                for element in &content.elements {
+                    let indent = element.indent as f32 * 20.0;
+
+                    ui.horizontal(|ui| {
+                        ui.add_space(indent);
+
+                        match &element.kind {
+                            ElementKind::Heading1 => {
+                                ui.heading(egui::RichText::new(&element.text).size(28.0).strong());
+                            }
+                            ElementKind::Heading2 => {
+                                ui.heading(egui::RichText::new(&element.text).size(22.0).strong());
+                            }
+                            ElementKind::Heading3 => {
+                                ui.heading(egui::RichText::new(&element.text).size(18.0).strong());
+                            }
+                            ElementKind::Paragraph => {
+                                ui.label(&element.text);
+                            }
+                            ElementKind::Link => {
+                                let link = ui.link(egui::RichText::new(&element.text).color(egui::Color32::from_rgb(0, 102, 204)));
+                                if link.clicked() {
+                                    if let Some(href) = &element.href {
+                                        self.url_input = href.clone();
+                                        if let Some(tab) = self.tabs.active_tab_mut() {
+                                            tab.navigate(href);
+                                        }
+                                    }
+                                }
+                                if link.hovered() {
+                                    if let Some(href) = &element.href {
+                                        link.on_hover_text(href);
+                                    }
+                                }
+                            }
+                            ElementKind::ListItem => {
+                                ui.label(&element.text);
+                            }
+                            ElementKind::Code => {
+                                ui.code(&element.text);
+                            }
+                            ElementKind::Text => {
+                                ui.label(&element.text);
+                            }
+                        }
+                    });
+                }
+            });
     }
 
     /// Render new tab page
