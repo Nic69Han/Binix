@@ -86,6 +86,10 @@ pub struct ContentSecurityPolicy {
     directives: HashMap<CspDirective, HashSet<String>>,
     report_only: bool,
     violations: Vec<CspViolation>,
+    /// Nonces for inline scripts/styles
+    nonces: HashSet<String>,
+    /// Report URI for violations
+    report_uri: Option<String>,
 }
 
 impl ContentSecurityPolicy {
@@ -181,6 +185,65 @@ impl ContentSecurityPolicy {
     /// Set report-only mode
     pub fn set_report_only(&mut self, report_only: bool) {
         self.report_only = report_only;
+    }
+
+    /// Add a nonce for inline scripts/styles
+    pub fn add_nonce(&mut self, nonce: &str) {
+        self.nonces.insert(nonce.to_string());
+    }
+
+    /// Check if a nonce is valid
+    pub fn has_nonce(&self, nonce: &str) -> bool {
+        self.nonces.contains(nonce)
+    }
+
+    /// Generate a random nonce
+    pub fn generate_nonce() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("{:x}", timestamp)
+    }
+
+    /// Set report URI
+    pub fn set_report_uri(&mut self, uri: &str) {
+        self.report_uri = Some(uri.to_string());
+    }
+
+    /// Get report URI
+    pub fn report_uri(&self) -> Option<&str> {
+        self.report_uri.as_deref()
+    }
+
+    /// Build a violation report (JSON format)
+    pub fn build_violation_report(&self, violation: &CspViolation) -> String {
+        format!(
+            r#"{{"csp-report":{{"document-uri":"{}","violated-directive":"{}","blocked-uri":"{}","disposition":"{}"}}}}"#,
+            violation.document_uri,
+            violation.violated_directive,
+            violation.blocked_uri,
+            if self.report_only { "report" } else { "enforce" }
+        )
+    }
+
+    /// Check and possibly block a resource, recording violation if blocked
+    pub fn check_and_report(
+        &mut self,
+        directive: CspDirective,
+        source: &str,
+        document_uri: &str,
+    ) -> bool {
+        if self.allows(directive, source) {
+            return true;
+        }
+
+        // Record violation
+        self.record_violation(directive, source, document_uri);
+
+        // In report-only mode, allow but report
+        self.report_only
     }
 }
 

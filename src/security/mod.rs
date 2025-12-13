@@ -6,11 +6,13 @@
 //! - Cross-Origin Resource Sharing (CORS)
 //! - Mixed content blocking
 
+mod cookies;
 mod cors;
 pub mod csp;
 mod sri;
 
-pub use cors::{CorsPolicy, CorsRequest, CorsResult};
+pub use cookies::{Cookie, CookieJar, SameSite};
+pub use cors::{CorsPolicy, CorsRequest, CorsResult, PreflightResponse};
 pub use csp::{ContentSecurityPolicy, CspDirective, CspViolation};
 pub use sri::{SriAlgorithm, SriHash, SubresourceIntegrity};
 

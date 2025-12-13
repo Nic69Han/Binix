@@ -85,10 +85,31 @@ pub struct CorsPolicy {
     allowed_methods: HashSet<String>,
     /// Allowed headers
     allowed_headers: HashSet<String>,
+    /// Exposed headers (accessible to JS)
+    exposed_headers: HashSet<String>,
     /// Allow credentials
     allow_credentials: bool,
     /// Max age for preflight cache (seconds)
     max_age: Option<u32>,
+}
+
+/// Preflight response for CORS
+#[derive(Debug, Clone)]
+pub struct PreflightResponse {
+    /// Whether the preflight is allowed
+    pub allowed: bool,
+    /// Access-Control-Allow-Origin header
+    pub allow_origin: Option<String>,
+    /// Access-Control-Allow-Methods header
+    pub allow_methods: Vec<String>,
+    /// Access-Control-Allow-Headers header
+    pub allow_headers: Vec<String>,
+    /// Access-Control-Expose-Headers header
+    pub expose_headers: Vec<String>,
+    /// Access-Control-Allow-Credentials header
+    pub allow_credentials: bool,
+    /// Access-Control-Max-Age header
+    pub max_age: Option<u32>,
 }
 
 impl CorsPolicy {
@@ -176,6 +197,71 @@ impl CorsPolicy {
     /// Check if header is allowed
     fn is_header_allowed(&self, header: &str) -> bool {
         self.allowed_headers.is_empty() || self.allowed_headers.contains(&header.to_lowercase())
+    }
+
+    /// Add an exposed header (accessible to JS)
+    pub fn expose_header(&mut self, header: &str) {
+        self.exposed_headers.insert(header.to_lowercase());
+    }
+
+    /// Handle preflight request
+    pub fn preflight(&self, request: &CorsRequest) -> PreflightResponse {
+        let allowed = matches!(self.check(request), CorsResult::Allowed);
+
+        PreflightResponse {
+            allowed,
+            allow_origin: if allowed {
+                if self.allow_any_origin {
+                    Some("*".to_string())
+                } else {
+                    Some(request.origin.clone())
+                }
+            } else {
+                None
+            },
+            allow_methods: self.allowed_methods.iter().cloned().collect(),
+            allow_headers: self.allowed_headers.iter().cloned().collect(),
+            expose_headers: self.exposed_headers.iter().cloned().collect(),
+            allow_credentials: self.allow_credentials,
+            max_age: self.max_age,
+        }
+    }
+
+    /// Parse CORS policy from response headers
+    pub fn from_headers(headers: &[(String, String)]) -> Self {
+        let mut policy = Self::new();
+
+        for (name, value) in headers {
+            match name.to_lowercase().as_str() {
+                "access-control-allow-origin" => {
+                    policy.allow_origin(value);
+                }
+                "access-control-allow-methods" => {
+                    for method in value.split(',') {
+                        policy.allow_method(method.trim());
+                    }
+                }
+                "access-control-allow-headers" => {
+                    for header in value.split(',') {
+                        policy.allow_header(header.trim());
+                    }
+                }
+                "access-control-expose-headers" => {
+                    for header in value.split(',') {
+                        policy.expose_header(header.trim());
+                    }
+                }
+                "access-control-allow-credentials" => {
+                    policy.allow_credentials = value.to_lowercase() == "true";
+                }
+                "access-control-max-age" => {
+                    policy.max_age = value.parse().ok();
+                }
+                _ => {}
+            }
+        }
+
+        policy
     }
 }
 
