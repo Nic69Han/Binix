@@ -7,7 +7,7 @@
 //! - Mixed content blocking
 
 mod cors;
-mod csp;
+pub mod csp;
 mod sri;
 
 pub use cors::{CorsPolicy, CorsRequest, CorsResult};

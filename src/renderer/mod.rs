@@ -2,10 +2,10 @@
 //!
 //! Handles HTML/CSS parsing and layout computation with parallel processing.
 
-mod css;
+pub mod css;
 mod dirty_tracking;
 mod dom;
-mod html;
+pub mod html;
 mod layout;
 mod layout_batch;
 mod streaming;

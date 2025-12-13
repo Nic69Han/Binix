@@ -23,6 +23,7 @@ pub mod compositor;
 pub mod devtools;
 pub mod engine;
 pub mod js_engine;
+pub mod memory;
 pub mod network;
 pub mod process;
 pub mod renderer;
@@ -30,6 +31,7 @@ pub mod security;
 pub mod ui;
 pub mod utils;
 pub mod wasm;
+pub mod wpt;
 
 // Re-export main types for convenience
 pub use engine::BrowserEngine;
