@@ -1,0 +1,70 @@
+//! Rendering engine for Binix browser
+//!
+//! Handles HTML/CSS parsing and layout computation with parallel processing.
+
+mod css;
+mod dom;
+mod html;
+mod layout;
+mod style;
+
+pub use css::CssParser;
+pub use dom::{Document, Node, NodeType};
+pub use html::HtmlParser;
+pub use layout::{LayoutBox, LayoutEngine};
+pub use style::StyleEngine;
+
+use crate::utils::Result;
+
+/// Trait for rendering engines
+pub trait RenderingEngine: Send + Sync {
+    /// Parse HTML content into a DOM tree
+    fn parse_html(&self, content: &str) -> Result<Document>;
+
+    /// Parse CSS content
+    fn parse_css(&self, content: &str) -> Result<css::Stylesheet>;
+
+    /// Compute layout for a document
+    fn compute_layout(&self, document: &Document) -> Result<LayoutBox>;
+}
+
+/// Default rendering engine implementation
+pub struct DefaultRenderingEngine {
+    html_parser: HtmlParser,
+    css_parser: CssParser,
+    layout_engine: LayoutEngine,
+    style_engine: StyleEngine,
+}
+
+impl DefaultRenderingEngine {
+    /// Create a new rendering engine
+    pub fn new() -> Self {
+        Self {
+            html_parser: HtmlParser::new(),
+            css_parser: CssParser::new(),
+            layout_engine: LayoutEngine::new(),
+            style_engine: StyleEngine::new(),
+        }
+    }
+}
+
+impl Default for DefaultRenderingEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RenderingEngine for DefaultRenderingEngine {
+    fn parse_html(&self, content: &str) -> Result<Document> {
+        self.html_parser.parse(content)
+    }
+
+    fn parse_css(&self, content: &str) -> Result<css::Stylesheet> {
+        self.css_parser.parse(content)
+    }
+
+    fn compute_layout(&self, document: &Document) -> Result<LayoutBox> {
+        self.layout_engine.compute(document)
+    }
+}
+

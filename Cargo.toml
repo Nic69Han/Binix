@@ -9,6 +9,7 @@ authors = ["Binix Team"]
 [dependencies]
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
 
 # Core dependencies will be added as we build the browser
 # See docs/browser_technical_specification.md for full list
