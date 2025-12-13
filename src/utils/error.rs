@@ -60,6 +60,8 @@ pub enum JsError {
     Compilation(String),
     /// Runtime error
     Runtime(String),
+    /// WebAssembly error
+    Wasm(String),
 }
 
 impl fmt::Display for BinixError {

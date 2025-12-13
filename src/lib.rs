@@ -11,6 +11,7 @@
 //! - **renderer**: HTML/CSS parsing and layout computation
 //! - **network**: HTTP/3 networking with connection pooling
 //! - **js_engine**: JavaScript runtime integration
+//! - **wasm**: WebAssembly runtime with SIMD and threading support
 //! - **compositor**: GPU-accelerated compositing
 //! - **ui**: User interface components
 //! - **utils**: Shared utilities and error types
@@ -22,6 +23,7 @@ pub mod network;
 pub mod renderer;
 pub mod ui;
 pub mod utils;
+pub mod wasm;
 
 // Re-export main types for convenience
 pub use engine::BrowserEngine;
