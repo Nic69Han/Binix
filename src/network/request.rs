@@ -76,5 +76,10 @@ impl Request {
     pub fn headers(&self) -> &HashMap<String, String> {
         &self.headers
     }
+
+    /// Get body bytes
+    pub fn body_bytes(&self) -> Option<&[u8]> {
+        self.body.as_deref()
+    }
 }
 

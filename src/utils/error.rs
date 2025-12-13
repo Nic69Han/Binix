@@ -32,6 +32,10 @@ pub enum NetworkError {
     ConnectionRefused,
     /// Invalid URL
     InvalidUrl(String),
+    /// Connection failed (generic network error)
+    ConnectionFailed(String),
+    /// Request failed
+    RequestFailed(String),
 }
 
 /// Rendering-specific errors
