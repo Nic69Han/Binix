@@ -4,10 +4,12 @@
 
 mod client;
 mod dns;
+mod http3;
 mod request;
 mod response;
 
 pub use client::NetworkClient;
+pub use http3::{Http3Client, Http3Config, Http3Connection};
 pub use request::Request;
 pub use response::Response;
 

@@ -22,10 +22,14 @@ pub enum BinixError {
 pub enum NetworkError {
     /// DNS resolution failed
     DnsResolution(String),
+    /// DNS lookup error
+    DnsError(String),
     /// Connection timed out
     Timeout,
     /// TLS/SSL error
     Tls(String),
+    /// TLS error (alias)
+    TlsError(String),
     /// HTTP error with status code
     Http(u16, String),
     /// Connection refused
@@ -36,6 +40,8 @@ pub enum NetworkError {
     ConnectionFailed(String),
     /// Request failed
     RequestFailed(String),
+    /// QUIC protocol error
+    QuicError(String),
 }
 
 /// Rendering-specific errors
