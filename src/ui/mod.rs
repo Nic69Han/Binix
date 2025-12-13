@@ -1,9 +1,11 @@
 //! User interface components for Binix browser
 
+mod app;
 mod tab;
 mod window;
 
-pub use tab::{Tab, TabManager};
+pub use app::{run, BrowserApp};
+pub use tab::{Tab, TabId, TabManager};
 pub use window::Window;
 
 /// UI configuration

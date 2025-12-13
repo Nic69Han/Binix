@@ -2,15 +2,26 @@
 //!
 //! Entry point for the Binix browser application.
 
-use binix::{BrowserEngine, NAME, VERSION};
+use binix::{NAME, VERSION};
+use std::env;
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Check for CLI mode
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() > 1 && args[1] == "--cli" {
+        run_cli_mode();
+    } else {
+        run_gui_mode();
+    }
+}
+
+fn run_cli_mode() {
     println!("🚀 {} v{} - Ultra-High-Performance Web Browser", NAME, VERSION);
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     // Initialize the browser engine
-    let mut engine = BrowserEngine::new();
+    let _engine = binix::BrowserEngine::new();
 
     println!("✅ Browser engine initialized");
     println!("📊 Performance targets:");
@@ -18,6 +29,14 @@ async fn main() {
     println!("   • Memory per tab: < {}MB", binix::performance_targets::MAX_TAB_MEMORY_MB);
     println!("   • Memory reduction: {}% vs Chrome", binix::performance_targets::MEMORY_REDUCTION_PERCENT);
 
-    // TODO: Start the browser UI
-    println!("\n🔧 Development build - UI not yet implemented");
+    println!("\n🔧 CLI mode - use without --cli flag for GUI");
+}
+
+fn run_gui_mode() {
+    println!("🚀 {} v{} - Starting GUI...", NAME, VERSION);
+
+    if let Err(e) = binix::ui::run() {
+        eprintln!("❌ Failed to start browser: {}", e);
+        std::process::exit(1);
+    }
 }

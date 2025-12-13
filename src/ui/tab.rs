@@ -1,7 +1,5 @@
 //! Tab management
 
-use crate::engine::BrowserEngine;
-
 /// Unique tab identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TabId(u64);

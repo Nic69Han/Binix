@@ -22,6 +22,9 @@ env_logger = "0.11.8"
 thiserror = "2.0.17"
 boa_engine = "0.21.0"
 boa_gc = "0.21.0"
+winit = "0.30.12"
+egui = "0.33.3"
+eframe = "0.33.3"
 
 # Core dependencies will be added as we build the browser
 # See docs/browser_technical_specification.md for full list
