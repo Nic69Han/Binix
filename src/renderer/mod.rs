@@ -6,12 +6,14 @@ mod css;
 mod dom;
 mod html;
 mod layout;
+mod streaming;
 mod style;
 
 pub use css::CssParser;
 pub use dom::{Document, ElementData, Node, NodeType};
 pub use html::HtmlParser;
 pub use layout::{LayoutBox, LayoutEngine};
+pub use streaming::{StreamingParser, ParserState, ParsedChunk};
 pub use style::StyleEngine;
 
 use crate::utils::Result;
