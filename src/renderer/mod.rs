@@ -3,16 +3,20 @@
 //! Handles HTML/CSS parsing and layout computation with parallel processing.
 
 mod css;
+mod dirty_tracking;
 mod dom;
 mod html;
 mod layout;
+mod layout_batch;
 mod streaming;
 mod style;
 
 pub use css::CssParser;
+pub use dirty_tracking::{DirtyTracker, LayoutChange, Rect};
 pub use dom::{Document, ElementData, Node, NodeType};
 pub use html::HtmlParser;
 pub use layout::{LayoutBox, LayoutEngine};
+pub use layout_batch::{LayoutBatcher, BatchConfig, BatchResult};
 pub use streaming::{StreamingParser, ParserState, ParsedChunk};
 pub use style::StyleEngine;
 
