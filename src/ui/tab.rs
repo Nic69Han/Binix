@@ -377,26 +377,70 @@ struct CssRule {
     properties: std::collections::HashMap<String, String>,
 }
 
-/// A simplified CSS selector
-#[derive(Debug, Clone)]
-struct CssSelector {
+/// Combinator types for CSS selectors
+#[derive(Debug, Clone, PartialEq)]
+enum Combinator {
+    /// No combinator (single selector)
+    None,
+    /// Descendant selector (space): div p
+    Descendant,
+    /// Child selector (>): ul > li
+    Child,
+    /// Adjacent sibling (+): h1 + p
+    AdjacentSibling,
+    /// General sibling (~): h1 ~ p
+    GeneralSibling,
+}
+
+/// Pseudo-class types
+#[derive(Debug, Clone, PartialEq)]
+enum PseudoClass {
+    Hover,
+    Focus,
+    Active,
+    Visited,
+    Link,
+    FirstChild,
+    LastChild,
+    NthChild(i32),      // :nth-child(n)
+    NthLastChild(i32),  // :nth-last-child(n)
+    FirstOfType,
+    LastOfType,
+    Empty,
+    Not(Box<SimpleSelector>),
+}
+
+/// A simple selector part (tag, id, classes, pseudo-classes)
+#[derive(Debug, Clone, PartialEq)]
+struct SimpleSelector {
     tag: Option<String>,
     id: Option<String>,
     classes: Vec<String>,
+    pseudo_classes: Vec<PseudoClass>,
 }
 
-impl CssSelector {
-    /// Calculate specificity (id, class, tag)
-    fn specificity(&self) -> (u32, u32, u32) {
-        (
-            if self.id.is_some() { 1 } else { 0 },
-            self.classes.len() as u32,
-            if self.tag.is_some() { 1 } else { 0 },
-        )
+impl SimpleSelector {
+    fn new() -> Self {
+        Self { tag: None, id: None, classes: Vec::new(), pseudo_classes: Vec::new() }
     }
 
-    /// Check if selector matches element attributes
-    fn matches(&self, tag_name: &str, id: Option<&str>, classes: &[String]) -> bool {
+    fn is_empty(&self) -> bool {
+        self.tag.is_none() && self.id.is_none() && self.classes.is_empty() && self.pseudo_classes.is_empty()
+    }
+
+    /// Check if this simple selector matches an element
+    /// Additional context for pseudo-classes
+    fn matches_with_context(
+        &self,
+        tag_name: &str,
+        id: Option<&str>,
+        classes: &[String],
+        is_first_child: bool,
+        is_last_child: bool,
+        child_index: usize,
+        sibling_count: usize,
+        has_children: bool,
+    ) -> bool {
         // Check tag
         if let Some(ref sel_tag) = self.tag {
             if sel_tag.to_lowercase() != tag_name.to_lowercase() {
@@ -419,28 +463,177 @@ impl CssSelector {
             }
         }
 
+        // Check pseudo-classes
+        for pseudo in &self.pseudo_classes {
+            match pseudo {
+                PseudoClass::FirstChild => {
+                    if !is_first_child { return false; }
+                }
+                PseudoClass::LastChild => {
+                    if !is_last_child { return false; }
+                }
+                PseudoClass::NthChild(n) => {
+                    if child_index as i32 + 1 != *n { return false; }
+                }
+                PseudoClass::NthLastChild(n) => {
+                    let from_end = sibling_count as i32 - child_index as i32;
+                    if from_end != *n { return false; }
+                }
+                PseudoClass::Empty => {
+                    if has_children { return false; }
+                }
+                // Interactive pseudo-classes (hover, focus, etc.) need runtime state
+                // For static rendering, we skip them
+                PseudoClass::Hover | PseudoClass::Focus | PseudoClass::Active => {
+                    // These require interactive state - skip for now
+                    return false;
+                }
+                PseudoClass::Link => {
+                    // Link matches unvisited <a> elements
+                    if tag_name.to_lowercase() != "a" { return false; }
+                }
+                PseudoClass::Visited => {
+                    // We don't track visited state
+                    return false;
+                }
+                _ => {}
+            }
+        }
+
         true
+    }
+
+    /// Simple match without pseudo-class context (for backward compatibility)
+    fn matches(&self, tag_name: &str, id: Option<&str>, classes: &[String]) -> bool {
+        // If no pseudo-classes, do simple match
+        if self.pseudo_classes.is_empty() {
+            // Check tag
+            if let Some(ref sel_tag) = self.tag {
+                if sel_tag.to_lowercase() != tag_name.to_lowercase() {
+                    return false;
+                }
+            }
+
+            // Check id
+            if let Some(ref sel_id) = self.id {
+                match id {
+                    Some(elem_id) if elem_id == sel_id => {}
+                    _ => return false,
+                }
+            }
+
+            // Check classes
+            for class in &self.classes {
+                if !classes.iter().any(|c| c == class) {
+                    return false;
+                }
+            }
+
+            true
+        } else {
+            // Use default context for pseudo-classes
+            self.matches_with_context(tag_name, id, classes, false, false, 0, 1, true)
+        }
+    }
+
+    /// Calculate specificity contribution
+    fn specificity(&self) -> (u32, u32, u32) {
+        (
+            if self.id.is_some() { 1 } else { 0 },
+            self.classes.len() as u32 + self.pseudo_classes.len() as u32,
+            if self.tag.is_some() { 1 } else { 0 },
+        )
     }
 }
 
-/// Parse a selector string into CssSelector
-fn parse_css_selector(selector: &str) -> CssSelector {
-    let selector = selector.trim();
-    let mut tag = None;
-    let mut id = None;
-    let mut classes = Vec::new();
+/// A compound selector with optional combinators
+#[derive(Debug, Clone)]
+struct CssSelector {
+    /// Parts of the selector chain
+    parts: Vec<(Combinator, SimpleSelector)>,
+}
+
+impl CssSelector {
+    /// Calculate total specificity (id, class, tag)
+    fn specificity(&self) -> (u32, u32, u32) {
+        let mut total = (0u32, 0u32, 0u32);
+        for (_, part) in &self.parts {
+            let s = part.specificity();
+            total.0 += s.0;
+            total.1 += s.1;
+            total.2 += s.2;
+        }
+        total
+    }
+
+    /// Check if selector matches element (simplified - only checks the last part for now)
+    /// Full combinator support requires DOM tree context
+    fn matches(&self, tag_name: &str, id: Option<&str>, classes: &[String]) -> bool {
+        // For simple selectors, just check the last part
+        if let Some((combinator, last_part)) = self.parts.last() {
+            if *combinator == Combinator::None || self.parts.len() == 1 {
+                return last_part.matches(tag_name, id, classes);
+            }
+            // For compound selectors, we still match the last part
+            // Full combinator matching requires ancestry info (future enhancement)
+            last_part.matches(tag_name, id, classes)
+        } else {
+            false
+        }
+    }
+}
+
+/// Parse a pseudo-class string into PseudoClass enum
+fn parse_pseudo_class(s: &str) -> Option<PseudoClass> {
+    let s = s.to_lowercase();
+    match s.as_str() {
+        "hover" => Some(PseudoClass::Hover),
+        "focus" => Some(PseudoClass::Focus),
+        "active" => Some(PseudoClass::Active),
+        "visited" => Some(PseudoClass::Visited),
+        "link" => Some(PseudoClass::Link),
+        "first-child" => Some(PseudoClass::FirstChild),
+        "last-child" => Some(PseudoClass::LastChild),
+        "first-of-type" => Some(PseudoClass::FirstOfType),
+        "last-of-type" => Some(PseudoClass::LastOfType),
+        "empty" => Some(PseudoClass::Empty),
+        _ if s.starts_with("nth-child(") && s.ends_with(')') => {
+            let inner = &s[10..s.len()-1];
+            inner.trim().parse::<i32>().ok().map(PseudoClass::NthChild)
+        }
+        _ if s.starts_with("nth-last-child(") && s.ends_with(')') => {
+            let inner = &s[15..s.len()-1];
+            inner.trim().parse::<i32>().ok().map(PseudoClass::NthLastChild)
+        }
+        _ => None,
+    }
+}
+
+/// Parse a simple selector part (tag#id.class1.class2:pseudo)
+fn parse_simple_selector(s: &str) -> SimpleSelector {
+    let s = s.trim();
+    let mut selector = SimpleSelector::new();
+
+    if s.is_empty() {
+        return selector;
+    }
 
     let mut current = String::new();
-    let mut mode = 't'; // t=tag, #=id, .=class
+    let mut mode = 't'; // t=tag, #=id, .=class, :=pseudo
 
-    for ch in selector.chars() {
+    for ch in s.chars() {
         match ch {
             '#' => {
                 if !current.is_empty() {
                     match mode {
-                        't' => tag = Some(current.clone()),
-                        '.' => classes.push(current.clone()),
-                        '#' => id = Some(current.clone()),
+                        't' => selector.tag = Some(current.clone()),
+                        '.' => selector.classes.push(current.clone()),
+                        '#' => selector.id = Some(current.clone()),
+                        ':' => {
+                            if let Some(pseudo) = parse_pseudo_class(&current) {
+                                selector.pseudo_classes.push(pseudo);
+                            }
+                        }
                         _ => {}
                     }
                     current.clear();
@@ -450,31 +643,36 @@ fn parse_css_selector(selector: &str) -> CssSelector {
             '.' => {
                 if !current.is_empty() {
                     match mode {
-                        't' => tag = Some(current.clone()),
-                        '.' => classes.push(current.clone()),
-                        '#' => id = Some(current.clone()),
+                        't' => selector.tag = Some(current.clone()),
+                        '.' => selector.classes.push(current.clone()),
+                        '#' => selector.id = Some(current.clone()),
+                        ':' => {
+                            if let Some(pseudo) = parse_pseudo_class(&current) {
+                                selector.pseudo_classes.push(pseudo);
+                            }
+                        }
                         _ => {}
                     }
                     current.clear();
                 }
                 mode = '.';
             }
-            ' ' | '>' | '+' | '~' => {
-                // Stop at combinators (simplified - only match the last part)
+            ':' => {
                 if !current.is_empty() {
                     match mode {
-                        't' => tag = Some(current.clone()),
-                        '.' => classes.push(current.clone()),
-                        '#' => id = Some(current.clone()),
+                        't' => selector.tag = Some(current.clone()),
+                        '.' => selector.classes.push(current.clone()),
+                        '#' => selector.id = Some(current.clone()),
+                        ':' => {
+                            if let Some(pseudo) = parse_pseudo_class(&current) {
+                                selector.pseudo_classes.push(pseudo);
+                            }
+                        }
                         _ => {}
                     }
                     current.clear();
                 }
-                // Reset for next part
-                tag = None;
-                id = None;
-                classes.clear();
-                mode = 't';
+                mode = ':';
             }
             _ => {
                 current.push(ch);
@@ -485,14 +683,103 @@ fn parse_css_selector(selector: &str) -> CssSelector {
     // Handle remaining
     if !current.is_empty() {
         match mode {
-            't' => tag = Some(current),
-            '.' => classes.push(current),
-            '#' => id = Some(current),
+            't' => selector.tag = Some(current),
+            '.' => selector.classes.push(current),
+            '#' => selector.id = Some(current),
+            ':' => {
+                if let Some(pseudo) = parse_pseudo_class(&current) {
+                    selector.pseudo_classes.push(pseudo);
+                }
+            }
             _ => {}
         }
     }
 
-    CssSelector { tag, id, classes }
+    selector
+}
+
+/// Parse a selector string into CssSelector with combinator support
+fn parse_css_selector(selector: &str) -> CssSelector {
+    let selector = selector.trim();
+    let mut parts: Vec<(Combinator, SimpleSelector)> = Vec::new();
+
+    // Tokenize selector into parts separated by combinators
+    let mut current_part = String::new();
+    let mut pending_combinator = Combinator::None;
+    let mut chars = selector.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            ' ' => {
+                // Could be descendant or just whitespace around another combinator
+                if !current_part.is_empty() {
+                    let simple = parse_simple_selector(&current_part);
+                    if !simple.is_empty() {
+                        parts.push((pending_combinator, simple));
+                        pending_combinator = Combinator::Descendant;
+                    }
+                    current_part.clear();
+                }
+                // Skip additional whitespace and check for explicit combinator
+                while chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+            }
+            '>' => {
+                if !current_part.is_empty() {
+                    let simple = parse_simple_selector(&current_part);
+                    if !simple.is_empty() {
+                        parts.push((pending_combinator, simple));
+                    }
+                    current_part.clear();
+                }
+                pending_combinator = Combinator::Child;
+                // Skip whitespace after combinator
+                while chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+            }
+            '+' => {
+                if !current_part.is_empty() {
+                    let simple = parse_simple_selector(&current_part);
+                    if !simple.is_empty() {
+                        parts.push((pending_combinator, simple));
+                    }
+                    current_part.clear();
+                }
+                pending_combinator = Combinator::AdjacentSibling;
+                while chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+            }
+            '~' => {
+                if !current_part.is_empty() {
+                    let simple = parse_simple_selector(&current_part);
+                    if !simple.is_empty() {
+                        parts.push((pending_combinator, simple));
+                    }
+                    current_part.clear();
+                }
+                pending_combinator = Combinator::GeneralSibling;
+                while chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+            }
+            _ => {
+                current_part.push(ch);
+            }
+        }
+    }
+
+    // Handle remaining part
+    if !current_part.is_empty() {
+        let simple = parse_simple_selector(&current_part);
+        if !simple.is_empty() {
+            parts.push((pending_combinator, simple));
+        }
+    }
+
+    CssSelector { parts }
 }
 
 /// Parse CSS text into rules
@@ -595,6 +882,70 @@ fn extract_stylesheets(handle: &Handle) -> String {
     css
 }
 
+/// Extract external stylesheet URLs from <link rel="stylesheet"> elements
+fn extract_external_stylesheets(handle: &Handle, base_url: &str) -> Vec<String> {
+    use markup5ever_rcdom::NodeData;
+
+    let mut urls = Vec::new();
+
+    match &handle.data {
+        NodeData::Element { name, attrs, .. } => {
+            if name.local.as_ref() == "link" {
+                let attrs = attrs.borrow();
+
+                // Check if it's a stylesheet link
+                let is_stylesheet = attrs.iter().any(|a| {
+                    a.name.local.as_ref() == "rel" &&
+                    a.value.to_string().to_lowercase().contains("stylesheet")
+                });
+
+                if is_stylesheet {
+                    // Get the href attribute
+                    if let Some(href_attr) = attrs.iter().find(|a| a.name.local.as_ref() == "href") {
+                        let href = href_attr.value.to_string();
+                        let resolved = resolve_url(&href, base_url);
+                        urls.push(resolved);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    // Recurse
+    for child in handle.children.borrow().iter() {
+        urls.extend(extract_external_stylesheets(child, base_url));
+    }
+
+    urls
+}
+
+/// Fetch external CSS file (blocking)
+fn fetch_external_css(url: &str) -> Option<String> {
+    // Skip non-HTTP URLs for now
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return None;
+    }
+
+    // Use blocking reqwest for simplicity
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent("Binix/0.1.0")
+        .build()
+        .ok()?;
+
+    match client.get(url).send() {
+        Ok(response) => {
+            if response.status().is_success() {
+                response.text().ok()
+            } else {
+                None
+            }
+        }
+        Err(_) => None,
+    }
+}
+
 /// Parse HTML to renderable content
 fn parse_html_to_content(html: &str, base_url: &str) -> PageContent {
     use html5ever::tendril::TendrilSink;
@@ -607,9 +958,24 @@ fn parse_html_to_content(html: &str, base_url: &str) -> PageContent {
         .read_from(&mut html.as_bytes())
         .expect("Failed to parse HTML");
 
-    // Extract CSS from <style> elements
-    let css_text = extract_stylesheets(&dom.document);
-    let css_rules = parse_css_rules(&css_text);
+    // Collect all CSS: external stylesheets first, then inline styles
+    let mut all_css = String::new();
+
+    // 1. Extract and fetch external stylesheets
+    let external_urls = extract_external_stylesheets(&dom.document, base_url);
+    for url in &external_urls {
+        if let Some(css) = fetch_external_css(url) {
+            all_css.push_str(&css);
+            all_css.push('\n');
+        }
+    }
+
+    // 2. Extract inline <style> elements (these have higher precedence)
+    let inline_css = extract_stylesheets(&dom.document);
+    all_css.push_str(&inline_css);
+
+    // Parse all CSS rules
+    let css_rules = parse_css_rules(&all_css);
 
     let mut elements = Vec::new();
     let mut title = String::new();
