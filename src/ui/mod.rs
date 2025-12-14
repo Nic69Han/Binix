@@ -12,7 +12,7 @@ pub use events::{
     Modifiers, MouseButton, MouseEvent, ScrollEvent, TouchEvent, TouchPoint,
 };
 pub use images::{ImageCache, ImageState, LoadedImage, SharedImageCache, create_shared_cache, decode_image};
-pub use tab::{ElementBounds, ElementKind, ElementStyle, PageContent, RenderElement, Tab, TabId, TabManager, TextAlign};
+pub use tab::{DisplayMode, ElementBounds, ElementKind, ElementStyle, FormAttributes, PageContent, RenderElement, Tab, TabId, TabManager, TextAlign};
 pub use window::Window;
 
 /// UI configuration

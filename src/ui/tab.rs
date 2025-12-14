@@ -2,6 +2,8 @@
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
+use crate::js_engine::JsRuntime;
+use markup5ever_rcdom::Handle;
 
 /// Unique tab identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -22,6 +24,10 @@ pub struct PageContent {
     pub elements: Vec<RenderElement>,
     /// Error message if loading failed
     pub error: Option<String>,
+    /// Console output from JavaScript
+    pub console_output: Vec<String>,
+    /// JavaScript errors
+    pub js_errors: Vec<String>,
 }
 
 impl Default for PageContent {
@@ -30,6 +36,8 @@ impl Default for PageContent {
             title: "New Tab".to_string(),
             elements: Vec::new(),
             error: None,
+            console_output: Vec::new(),
+            js_errors: Vec::new(),
         }
     }
 }
@@ -55,6 +63,35 @@ pub struct RenderElement {
     pub alt: Option<String>,
     /// Children elements (for nested rendering)
     pub children: Vec<RenderElement>,
+    /// Form element attributes
+    pub form_attrs: Option<FormAttributes>,
+    /// Is this an inline element? (should flow horizontally)
+    pub is_inline: bool,
+}
+
+/// Form element attributes
+#[derive(Debug, Clone, Default)]
+pub struct FormAttributes {
+    /// Input type (text, password, submit, etc.)
+    pub input_type: String,
+    /// Element name attribute
+    pub name: String,
+    /// Element id attribute
+    pub id: String,
+    /// Placeholder text
+    pub placeholder: String,
+    /// Current value
+    pub value: String,
+    /// Is the element disabled?
+    pub disabled: bool,
+    /// Is the element checked? (checkbox/radio)
+    pub checked: bool,
+    /// Options for select elements
+    pub options: Vec<(String, String)>, // (value, label)
+    /// Form action URL (from parent form)
+    pub form_action: Option<String>,
+    /// Form method (GET/POST)
+    pub form_method: String,
 }
 
 /// Element bounding box
@@ -74,6 +111,17 @@ pub enum TextAlign {
     Center,
     Right,
     Justify,
+}
+
+/// Display mode for CSS display property
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum DisplayMode {
+    #[default]
+    Block,
+    Inline,
+    InlineBlock,
+    Flex,
+    None,
 }
 
 /// Visual styling for elements
@@ -107,6 +155,10 @@ pub struct ElementStyle {
     pub line_height: f32,
     /// Max width for text wrapping (0 = no wrap)
     pub max_width: f32,
+    /// Display mode (block, inline, none, etc.)
+    pub display: DisplayMode,
+    /// Visibility (hidden elements still take space)
+    pub visible: bool,
 }
 
 impl Default for ElementStyle {
@@ -125,7 +177,9 @@ impl Default for ElementStyle {
             border_radius: 0.0,
             text_align: TextAlign::Left,
             line_height: 1.4,
-            max_width: 0.0, // 0 means use container width
+            max_width: 0.0,
+            display: DisplayMode::Block,
+            visible: true,
         }
     }
 }
@@ -143,6 +197,8 @@ impl RenderElement {
             src: None,
             alt: None,
             children: Vec::new(),
+            form_attrs: None,
+            is_inline: false,
         }
     }
 
@@ -158,6 +214,41 @@ impl RenderElement {
             src: Some(src),
             alt: Some(alt),
             children: Vec::new(),
+            form_attrs: None,
+            is_inline: false,
+        }
+    }
+
+    /// Create a form input element
+    pub fn input(input_type: &str, name: &str, placeholder: &str, value: &str) -> Self {
+        let kind = match input_type {
+            "submit" | "button" => ElementKind::Button,
+            "checkbox" | "radio" => ElementKind::Input,
+            _ => ElementKind::Input,
+        };
+        Self {
+            kind,
+            text: value.to_string(),
+            bounds: ElementBounds::default(),
+            style: ElementStyle::default(),
+            is_link: false,
+            href: None,
+            src: None,
+            alt: None,
+            children: Vec::new(),
+            form_attrs: Some(FormAttributes {
+                input_type: input_type.to_string(),
+                name: name.to_string(),
+                id: String::new(),
+                placeholder: placeholder.to_string(),
+                value: value.to_string(),
+                disabled: false,
+                checked: false,
+                options: Vec::new(),
+                form_action: None,
+                form_method: String::new(),
+            }),
+            is_inline: true,
         }
     }
 
@@ -192,7 +283,12 @@ pub enum ElementKind {
     // Form elements
     Button,
     Input,
+    Textarea,
+    Select,
+    Checkbox,
+    Radio,
     Label,
+    Form,
 }
 
 /// A browser tab
@@ -205,6 +301,10 @@ pub struct Tab {
     content: Arc<Mutex<PageContent>>,
     /// Channel for receiving loaded content
     content_receiver: Option<Receiver<PageContent>>,
+    /// Navigation history (past URLs)
+    history_back: Vec<String>,
+    /// Forward history (URLs we went back from)
+    history_forward: Vec<String>,
 }
 
 impl Tab {
@@ -217,6 +317,8 @@ impl Tab {
             loading: false,
             content: Arc::new(Mutex::new(PageContent::default())),
             content_receiver: None,
+            history_back: Vec::new(),
+            history_forward: Vec::new(),
         }
     }
 
@@ -244,13 +346,22 @@ impl Tab {
     pub fn navigate(&mut self, url: impl Into<String>) {
         let url_str: String = url.into();
 
-        // Normalize URL
-        let normalized_url = if !url_str.starts_with("http://") && !url_str.starts_with("https://")
+        // Normalize URL - don't add https:// if already has a protocol
+        let normalized_url = if url_str.starts_with("http://")
+            || url_str.starts_with("https://")
+            || url_str.starts_with("file://")
         {
-            format!("https://{}", url_str)
-        } else {
             url_str
+        } else {
+            format!("https://{}", url_str)
         };
+
+        // Save current URL to history if we have one
+        if !self.url.is_empty() {
+            self.history_back.push(self.url.clone());
+            // Clear forward history when navigating to a new page
+            self.history_forward.clear();
+        }
 
         self.url = normalized_url.clone();
         self.loading = true;
@@ -260,10 +371,79 @@ impl Tab {
         self.content_receiver = Some(rx);
 
         // Spawn async task to fetch and parse the page
-        let content = Arc::clone(&self.content);
+        let _content = Arc::clone(&self.content);
         std::thread::spawn(move || {
+            eprintln!("[DEBUG] Starting fetch for: {}", normalized_url);
             let result = fetch_and_parse(&normalized_url);
-            let _ = tx.send(result);
+            eprintln!("[DEBUG] Fetch complete. Title: '{}', Elements: {}, Error: {:?}",
+                      result.title, result.elements.len(), result.error);
+            if let Err(e) = tx.send(result) {
+                eprintln!("[DEBUG] Failed to send result: {}", e);
+            }
+        });
+    }
+
+    /// Check if we can go back in history
+    pub fn can_go_back(&self) -> bool {
+        !self.history_back.is_empty()
+    }
+
+    /// Check if we can go forward in history
+    pub fn can_go_forward(&self) -> bool {
+        !self.history_forward.is_empty()
+    }
+
+    /// Go back in history
+    pub fn go_back(&mut self) {
+        if let Some(prev_url) = self.history_back.pop() {
+            // Save current URL to forward history
+            if !self.url.is_empty() {
+                self.history_forward.push(self.url.clone());
+            }
+
+            // Navigate without adding to back history
+            self.navigate_internal(&prev_url);
+        }
+    }
+
+    /// Go forward in history
+    pub fn go_forward(&mut self) {
+        if let Some(next_url) = self.history_forward.pop() {
+            // Save current URL to back history
+            if !self.url.is_empty() {
+                self.history_back.push(self.url.clone());
+            }
+
+            // Navigate without adding to back history
+            self.navigate_internal(&next_url);
+        }
+    }
+
+    /// Reload the current page
+    pub fn reload(&mut self) {
+        if !self.url.is_empty() {
+            let url = self.url.clone();
+            self.navigate_internal(&url);
+        }
+    }
+
+    /// Internal navigation that doesn't modify history
+    fn navigate_internal(&mut self, url: &str) {
+        self.url = url.to_string();
+        self.loading = true;
+
+        let (tx, rx) = channel::<PageContent>();
+        self.content_receiver = Some(rx);
+
+        let normalized_url = url.to_string();
+        std::thread::spawn(move || {
+            eprintln!("[DEBUG] Starting fetch for: {}", normalized_url);
+            let result = fetch_and_parse(&normalized_url);
+            eprintln!("[DEBUG] Fetch complete. Title: '{}', Elements: {}, Error: {:?}",
+                      result.title, result.elements.len(), result.error);
+            if let Err(e) = tx.send(result) {
+                eprintln!("[DEBUG] Failed to send result: {}", e);
+            }
         });
     }
 
@@ -317,6 +497,8 @@ fn fetch_and_parse(url: &str) -> PageContent {
                 title: "Error".to_string(),
                 elements: vec![],
                 error: Some(format!("Failed to create client: {}", e)),
+                console_output: Vec::new(),
+                js_errors: Vec::new(),
             };
         }
     };
@@ -328,6 +510,8 @@ fn fetch_and_parse(url: &str) -> PageContent {
                 title: "Error".to_string(),
                 elements: vec![],
                 error: Some(format!("Failed to fetch: {}", e)),
+                console_output: Vec::new(),
+                js_errors: Vec::new(),
             };
         }
     };
@@ -339,6 +523,8 @@ fn fetch_and_parse(url: &str) -> PageContent {
                 title: "Error".to_string(),
                 elements: vec![],
                 error: Some(format!("Failed to read response: {}", e)),
+                console_output: Vec::new(),
+                js_errors: Vec::new(),
             };
         }
     };
@@ -360,6 +546,8 @@ fn fetch_local_file(url: &str) -> PageContent {
             title: "Error".to_string(),
             elements: vec![],
             error: Some(format!("Failed to read file: {}", e)),
+            console_output: Vec::new(),
+            js_errors: Vec::new(),
         },
     }
 }
@@ -988,10 +1176,173 @@ fn parse_html_to_content(html: &str, base_url: &str) -> PageContent {
         title = "Untitled".to_string();
     }
 
+    // 3. Extract and execute JavaScript
+    let (console_output, js_errors) = execute_page_scripts(&dom.document, base_url);
+
     PageContent {
         title,
         elements,
         error: None,
+        console_output,
+        js_errors,
+    }
+}
+
+/// Extract and execute JavaScript from the page
+fn execute_page_scripts(handle: &Handle, base_url: &str) -> (Vec<String>, Vec<String>) {
+    use std::sync::{Arc, Mutex};
+
+    let console_output = Arc::new(Mutex::new(Vec::new()));
+    let js_errors = Arc::new(Mutex::new(Vec::new()));
+
+    // Extract all script contents
+    let scripts = extract_scripts(handle, base_url);
+
+    log::info!("Found {} JavaScript scripts to execute", scripts.len());
+
+    if scripts.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    // Create JavaScript runtime with URL context
+    let mut runtime = JsRuntime::with_url(base_url);
+
+    // Execute each script
+    for (i, script) in scripts.iter().enumerate() {
+        log::info!("Executing script {} ({} bytes)", i + 1, script.len());
+        log::debug!("Script content: {}", &script[..script.len().min(200)]);
+
+        match runtime.execute(script) {
+            Ok(result) => {
+                log::info!("Script {} executed successfully, result: {:?}", i + 1, result);
+            }
+            Err(e) => {
+                let error_msg = format!("JS Error in script {}: {}", i + 1, e);
+                log::warn!("{}", error_msg);
+                if let Ok(mut errors) = js_errors.lock() {
+                    errors.push(error_msg);
+                }
+            }
+        }
+    }
+
+    let output = console_output.lock().map(|o| o.clone()).unwrap_or_default();
+    let errors = js_errors.lock().map(|e| e.clone()).unwrap_or_default();
+
+    (output, errors)
+}
+
+/// Extract script contents from the DOM
+fn extract_scripts(handle: &Handle, base_url: &str) -> Vec<String> {
+    use markup5ever_rcdom::NodeData;
+
+    let mut scripts = Vec::new();
+    extract_scripts_recursive(handle, &mut scripts, base_url);
+    scripts
+}
+
+fn extract_scripts_recursive(handle: &Handle, scripts: &mut Vec<String>, base_url: &str) {
+    use markup5ever_rcdom::NodeData;
+
+    match &handle.data {
+        NodeData::Element { name, attrs, .. } => {
+            let tag = name.local.as_ref();
+
+            if tag == "script" {
+                let attrs_ref = attrs.borrow();
+
+                // Check for src attribute (external script)
+                let src = attrs_ref
+                    .iter()
+                    .find(|a| a.name.local.as_ref() == "src")
+                    .map(|a| a.value.to_string());
+
+                // Check script type
+                let script_type = attrs_ref
+                    .iter()
+                    .find(|a| a.name.local.as_ref() == "type")
+                    .map(|a| a.value.to_string())
+                    .unwrap_or_else(|| "text/javascript".to_string());
+
+                // Only process JavaScript (not modules or other types for now)
+                if script_type.contains("javascript") || script_type.is_empty() || script_type == "text/javascript" {
+                    if let Some(src_url) = src {
+                        // External script - fetch it
+                        let full_url = resolve_url(&src_url, base_url);
+                        if let Some(script_content) = fetch_external_script(&full_url) {
+                            scripts.push(script_content);
+                        }
+                    } else {
+                        // Inline script - extract text content
+                        let script_text = extract_script_text(handle);
+                        if !script_text.trim().is_empty() {
+                            scripts.push(script_text);
+                        }
+                    }
+                }
+                return; // Don't recurse into script tags
+            }
+        }
+        _ => {}
+    }
+
+    // Recurse into children
+    for child in handle.children.borrow().iter() {
+        extract_scripts_recursive(child, scripts, base_url);
+    }
+}
+
+/// Extract text content from a script element
+fn extract_script_text(handle: &Handle) -> String {
+    use markup5ever_rcdom::NodeData;
+
+    let mut text = String::new();
+    for child in handle.children.borrow().iter() {
+        if let NodeData::Text { contents } = &child.data {
+            text.push_str(&contents.borrow().to_string());
+        }
+    }
+    text
+}
+
+/// Fetch an external JavaScript file
+fn fetch_external_script(url: &str) -> Option<String> {
+    log::info!("Fetching external script: {}", url);
+
+    // Skip data URLs and javascript: URLs
+    if url.starts_with("data:") || url.starts_with("javascript:") {
+        return None;
+    }
+
+    // Handle local files
+    if url.starts_with("file://") {
+        let path = url.trim_start_matches("file://");
+        log::info!("Reading local script file: {}", path);
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                log::info!("Successfully read local script ({} bytes)", content.len());
+                return Some(content);
+            }
+            Err(e) => {
+                log::warn!("Failed to read local script {}: {}", path, e);
+                return None;
+            }
+        }
+    }
+
+    // Use blocking reqwest for HTTP(S) URLs
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+
+    let response = client.get(url).send().ok()?;
+
+    if response.status().is_success() {
+        response.text().ok()
+    } else {
+        log::warn!("Failed to fetch script {}: {}", url, response.status());
+        None
     }
 }
 
@@ -1053,8 +1404,6 @@ fn resolve_url(relative: &str, base_url: &str) -> String {
         format!("{}/{}", base, relative)
     }
 }
-
-use markup5ever_rcdom::Handle;
 
 /// Create a styled render element based on tag type
 fn create_styled_element(kind: ElementKind, text: String, y: f32, indent: u32) -> RenderElement {
@@ -1139,11 +1488,42 @@ fn create_styled_element(kind: ElementKind, text: String, y: f32, indent: u32) -
             style.padding = [8.0, 12.0, 8.0, 12.0];
             style.border_radius = 4.0;
         }
+        ElementKind::Textarea => {
+            style.font_size = 14.0;
+            style.background_color = Some([255, 255, 255, 255]);
+            style.border_color = Some([200, 200, 200, 255]);
+            style.border_width = [1.0; 4];
+            style.padding = [8.0, 12.0, 8.0, 12.0];
+            style.border_radius = 4.0;
+            style.margin = [4.0, 0.0, 4.0, 0.0];
+        }
+        ElementKind::Select => {
+            style.font_size = 14.0;
+            style.background_color = Some([255, 255, 255, 255]);
+            style.border_color = Some([200, 200, 200, 255]);
+            style.border_width = [1.0; 4];
+            style.padding = [8.0, 12.0, 8.0, 12.0];
+            style.border_radius = 4.0;
+        }
+        ElementKind::Checkbox | ElementKind::Radio => {
+            style.font_size = 14.0;
+            style.margin = [4.0, 8.0, 4.0, 0.0];
+        }
         ElementKind::Label => {
             style.font_size = 14.0;
             style.margin = [4.0, 0.0, 4.0, 0.0];
         }
+        ElementKind::Form => {
+            style.margin = [8.0, 0.0, 8.0, 0.0];
+        }
     }
+
+    // Determine if element is inline based on kind
+    let is_inline = matches!(kind,
+        ElementKind::Label | ElementKind::Input | ElementKind::Button |
+        ElementKind::Checkbox | ElementKind::Radio | ElementKind::Select |
+        ElementKind::Link | ElementKind::Text
+    );
 
     RenderElement {
         kind,
@@ -1160,6 +1540,8 @@ fn create_styled_element(kind: ElementKind, text: String, y: f32, indent: u32) -
         src: None,
         alt: None,
         children: Vec::new(),
+        form_attrs: None,
+        is_inline,
     }
 }
 
@@ -1348,6 +1730,13 @@ fn parse_css_size(value: &str) -> Option<f32> {
     value.parse().ok()
 }
 
+/// Form context for passing form action/method to child inputs
+#[derive(Clone, Default)]
+struct FormContext {
+    action: Option<String>,
+    method: String,
+}
+
 // Legacy function - replaced by extract_content_with_css
 #[allow(dead_code)]
 fn extract_content(
@@ -1357,6 +1746,18 @@ fn extract_content(
     y: &mut f32,
     indent: u32,
     base_url: &str,
+) {
+    extract_content_inner(handle, elements, title, y, indent, base_url, &FormContext::default())
+}
+
+fn extract_content_inner(
+    handle: &Handle,
+    elements: &mut Vec<RenderElement>,
+    title: &mut String,
+    y: &mut f32,
+    indent: u32,
+    base_url: &str,
+    form_ctx: &FormContext,
 ) {
     use markup5ever_rcdom::NodeData;
 
@@ -1540,43 +1941,133 @@ fn extract_content(
                 }
                 "button" => {
                     let text = extract_text(handle);
-                    if !text.is_empty() {
-                        let mut elem = create_styled_element(ElementKind::Button, text, *y, indent);
-                        apply_inline(&mut elem);
-                        elements.push(elem);
-                        *y += 1.0;
-                    }
-                    return;
-                }
-                "input" => {
-                    let input_type = attrs
-                        .iter()
-                        .find(|a| a.name.local.as_ref() == "type")
-                        .map(|a| a.value.to_string())
-                        .unwrap_or_else(|| "text".to_string());
-                    let placeholder = attrs
-                        .iter()
-                        .find(|a| a.name.local.as_ref() == "placeholder")
-                        .map(|a| a.value.to_string())
-                        .unwrap_or_default();
-                    let value = attrs
-                        .iter()
-                        .find(|a| a.name.local.as_ref() == "value")
-                        .map(|a| a.value.to_string())
-                        .unwrap_or_default();
-
-                    let display = if !value.is_empty() {
-                        value
-                    } else if !placeholder.is_empty() {
-                        format!("[{}]", placeholder)
-                    } else {
-                        format!("[{} input]", input_type)
-                    };
-
-                    let mut elem = create_styled_element(ElementKind::Input, display, *y, indent);
+                    let btn_text = if text.is_empty() { "Button".to_string() } else { text };
+                    let mut elem = create_styled_element(ElementKind::Button, btn_text.clone(), *y, indent);
+                    elem.form_attrs = Some(FormAttributes {
+                        input_type: "button".to_string(),
+                        name: get_attr(&attrs, "name"),
+                        id: get_attr(&attrs, "id"),
+                        value: btn_text,
+                        ..Default::default()
+                    });
                     apply_inline(&mut elem);
                     elements.push(elem);
                     *y += 1.0;
+                    return;
+                }
+                "input" => {
+                    let input_type = get_attr(&attrs, "type");
+                    let input_type = if input_type.is_empty() { "text".to_string() } else { input_type };
+                    let placeholder = get_attr(&attrs, "placeholder");
+                    let value = get_attr(&attrs, "value");
+                    let name = get_attr(&attrs, "name");
+                    let id = get_attr(&attrs, "id");
+                    let checked = attrs.iter().any(|a| a.name.local.as_ref() == "checked");
+                    let disabled = attrs.iter().any(|a| a.name.local.as_ref() == "disabled");
+
+                    let (kind, display) = match input_type.as_str() {
+                        "submit" | "button" => (ElementKind::Button, if value.is_empty() { "Submit".to_string() } else { value.clone() }),
+                        "checkbox" => (ElementKind::Checkbox, format!("[{}]", if checked { "x" } else { " " })),
+                        "radio" => (ElementKind::Radio, format!("({})", if checked { "•" } else { " " })),
+                        "hidden" => return, // Skip hidden inputs
+                        _ => {
+                            let display = if !placeholder.is_empty() {
+                                placeholder.clone()
+                            } else {
+                                format!("{} input", input_type)
+                            };
+                            (ElementKind::Input, display)
+                        }
+                    };
+
+                    let mut elem = create_styled_element(kind, display, *y, indent);
+                    elem.form_attrs = Some(FormAttributes {
+                        input_type: input_type.clone(),
+                        name,
+                        id,
+                        placeholder,
+                        value,
+                        disabled,
+                        checked,
+                        options: Vec::new(),
+                        form_action: form_ctx.action.clone(),
+                        form_method: form_ctx.method.clone(),
+                    });
+                    apply_inline(&mut elem);
+                    elements.push(elem);
+                    *y += 1.0;
+                    return;
+                }
+                "textarea" => {
+                    let text = extract_text(handle);
+                    let placeholder = get_attr(&attrs, "placeholder");
+                    let name = get_attr(&attrs, "name");
+                    let display = if !text.is_empty() { text.clone() } else if !placeholder.is_empty() { placeholder.clone() } else { "Enter text...".to_string() };
+
+                    let mut elem = create_styled_element(ElementKind::Textarea, display, *y, indent);
+                    elem.form_attrs = Some(FormAttributes {
+                        input_type: "textarea".to_string(),
+                        name,
+                        id: get_attr(&attrs, "id"),
+                        placeholder,
+                        value: text,
+                        form_action: form_ctx.action.clone(),
+                        form_method: form_ctx.method.clone(),
+                        ..Default::default()
+                    });
+                    apply_inline(&mut elem);
+                    elements.push(elem);
+                    *y += 2.0; // Textarea takes more space
+                    return;
+                }
+                "select" => {
+                    let name = get_attr(&attrs, "name");
+                    let mut options: Vec<(String, String)> = Vec::new();
+
+                    // Extract options
+                    for child in handle.children.borrow().iter() {
+                        if let NodeData::Element { name: child_name, attrs: child_attrs, .. } = &child.data {
+                            if child_name.local.as_ref() == "option" {
+                                let child_attrs = child_attrs.borrow();
+                                let opt_value = child_attrs.iter()
+                                    .find(|a| a.name.local.as_ref() == "value")
+                                    .map(|a| a.value.to_string())
+                                    .unwrap_or_default();
+                                let opt_text = extract_text(child);
+                                options.push((opt_value, opt_text));
+                            }
+                        }
+                    }
+
+                    let display = options.first().map(|(_, label)| label.clone()).unwrap_or_else(|| "Select...".to_string());
+                    let mut elem = create_styled_element(ElementKind::Select, format!("▼ {}", display), *y, indent);
+                    elem.form_attrs = Some(FormAttributes {
+                        input_type: "select".to_string(),
+                        name,
+                        id: get_attr(&attrs, "id"),
+                        options,
+                        ..Default::default()
+                    });
+                    apply_inline(&mut elem);
+                    elements.push(elem);
+                    *y += 1.0;
+                    return;
+                }
+                "form" => {
+                    // Extract form action and method
+                    let action = get_attr(&attrs, "action");
+                    let method = get_attr(&attrs, "method").to_uppercase();
+                    let method = if method.is_empty() { "GET".to_string() } else { method };
+
+                    let new_form_ctx = FormContext {
+                        action: if action.is_empty() { None } else { Some(resolve_url(&action, base_url)) },
+                        method,
+                    };
+
+                    // Recurse into form with form context
+                    for child in handle.children.borrow().iter() {
+                        extract_content_inner(child, elements, title, y, indent, base_url, &new_form_ctx);
+                    }
                     return;
                 }
                 "label" => {
@@ -1595,7 +2086,7 @@ fn extract_content(
                 "head" => {
                     // Only extract title from head, skip rendering other content
                     for child in handle.children.borrow().iter() {
-                        extract_content(child, elements, title, y, indent, base_url);
+                        extract_content_inner(child, elements, title, y, indent, base_url, form_ctx);
                     }
                     return;
                 }
@@ -1612,7 +2103,7 @@ fn extract_content(
 
             // Recurse into children
             for child in handle.children.borrow().iter() {
-                extract_content(child, elements, title, y, indent, base_url);
+                extract_content_inner(child, elements, title, y, indent, base_url, form_ctx);
             }
         }
         NodeData::Text { contents } => {
@@ -1625,12 +2116,15 @@ fn extract_content(
         }
         NodeData::Document => {
             for child in handle.children.borrow().iter() {
-                extract_content(child, elements, title, y, indent, base_url);
+                extract_content_inner(child, elements, title, y, indent, base_url, form_ctx);
             }
         }
         _ => {}
     }
 }
+
+/// Maximum recursion depth to prevent stack overflow on complex pages
+const MAX_RECURSION_DEPTH: u32 = 100;
 
 /// Extract content with CSS rules applied
 fn extract_content_with_css(
@@ -1642,6 +2136,25 @@ fn extract_content_with_css(
     base_url: &str,
     css_rules: &[CssRule],
 ) {
+    extract_content_with_css_inner(handle, elements, title, y, indent, base_url, css_rules, &FormContext::default(), 0)
+}
+
+fn extract_content_with_css_inner(
+    handle: &Handle,
+    elements: &mut Vec<RenderElement>,
+    title: &mut String,
+    y: &mut f32,
+    indent: u32,
+    base_url: &str,
+    css_rules: &[CssRule],
+    form_ctx: &FormContext,
+    depth: u32,
+) {
+    // Prevent stack overflow on deeply nested pages
+    if depth > MAX_RECURSION_DEPTH {
+        return;
+    }
+
     use markup5ever_rcdom::NodeData;
 
     match &handle.data {
@@ -1728,11 +2241,12 @@ fn extract_content_with_css(
                         elements.push(elem);
                         *y += 1.0;
                     }
+                    return; // Don't process children - text already extracted
                 }
                 "div" | "section" | "article" | "main" | "header" | "footer" | "nav" => {
                     // Container elements - always recurse into children
                     for child in handle.children.borrow().iter() {
-                        extract_content_with_css(child, elements, title, y, indent, base_url, css_rules);
+                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
                     }
                     return;
                 }
@@ -1751,7 +2265,7 @@ fn extract_content_with_css(
 
                     if has_special_children {
                         for child in handle.children.borrow().iter() {
-                            extract_content_with_css(child, elements, title, y, indent, base_url, css_rules);
+                            extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
                         }
                     } else {
                         let text = extract_text(handle);
@@ -1800,7 +2314,7 @@ fn extract_content_with_css(
                 }
                 "ul" | "ol" => {
                     for child in handle.children.borrow().iter() {
-                        extract_content_with_css(child, elements, title, y, indent + 1, base_url, css_rules);
+                        extract_content_with_css_inner(child, elements, title, y, indent + 1, base_url, css_rules, form_ctx, depth + 1);
                     }
                     return;
                 }
@@ -1838,29 +2352,191 @@ fn extract_content_with_css(
                     *y += 1.0;
                     return;
                 }
-                "script" | "style" | "noscript" | "meta" | "link" => {
+                "script" | "style" | "noscript" | "meta" | "link" | "template" => {
+                    return;
+                }
+                "svg" => {
+                    // SVG support - for now show placeholder or title
+                    let title_text = extract_svg_title(handle);
+                    if !title_text.is_empty() {
+                        let elem = create_styled_element(ElementKind::Image, format!("🖼 {}", title_text), *y, indent);
+                        elements.push(elem);
+                        *y += 1.0;
+                    }
+                    return;
+                }
+                "iframe" | "object" | "embed" | "canvas" => {
+                    // Skip embedded content
                     return;
                 }
                 "head" => {
                     for child in handle.children.borrow().iter() {
-                        extract_content_with_css(child, elements, title, y, indent, base_url, css_rules);
+                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
                     }
                     return;
                 }
                 "br" => {
                     *y += 0.5;
+                    return;
                 }
                 "hr" => {
                     let elem = create_styled_element(ElementKind::HorizontalRule, "───────────────────────────────".to_string(), *y, indent);
                     elements.push(elem);
                     *y += 1.0;
+                    return;
+                }
+                // Form elements
+                "button" => {
+                    let text = extract_text(handle);
+                    let btn_text = if text.is_empty() { "Button".to_string() } else { text };
+                    let mut elem = create_styled_element(ElementKind::Button, btn_text.clone(), *y, indent);
+                    elem.is_inline = true;
+                    elem.form_attrs = Some(FormAttributes {
+                        input_type: "button".to_string(),
+                        name: get_attr(&attrs_ref, "name"),
+                        id: get_attr(&attrs_ref, "id"),
+                        value: btn_text,
+                        form_action: form_ctx.action.clone(),
+                        form_method: form_ctx.method.clone(),
+                        ..Default::default()
+                    });
+                    apply_styles(&mut elem);
+                    elements.push(elem);
+                    // No y increment for inline elements
+                    return;
+                }
+                "input" => {
+                    let input_type = get_attr(&attrs_ref, "type");
+                    let input_type = if input_type.is_empty() { "text".to_string() } else { input_type };
+                    let placeholder = get_attr(&attrs_ref, "placeholder");
+                    let value = get_attr(&attrs_ref, "value");
+                    let name = get_attr(&attrs_ref, "name");
+                    let id = get_attr(&attrs_ref, "id");
+                    let checked = attrs_ref.iter().any(|a| a.name.local.as_ref() == "checked");
+                    let disabled = attrs_ref.iter().any(|a| a.name.local.as_ref() == "disabled");
+
+                    let (kind, display) = match input_type.as_str() {
+                        "submit" | "button" => (ElementKind::Button, if value.is_empty() { "Submit".to_string() } else { value.clone() }),
+                        "checkbox" => (ElementKind::Checkbox, String::new()),
+                        "radio" => (ElementKind::Radio, String::new()),
+                        "hidden" => return,
+                        _ => {
+                            let display = if !placeholder.is_empty() {
+                                placeholder.clone()
+                            } else {
+                                String::new()
+                            };
+                            (ElementKind::Input, display)
+                        }
+                    };
+
+                    let mut elem = create_styled_element(kind, display, *y, indent);
+                    elem.is_inline = true; // All inputs are inline
+                    elem.form_attrs = Some(FormAttributes {
+                        input_type: input_type.clone(),
+                        name,
+                        id,
+                        placeholder,
+                        value,
+                        disabled,
+                        checked,
+                        options: Vec::new(),
+                        form_action: form_ctx.action.clone(),
+                        form_method: form_ctx.method.clone(),
+                    });
+                    apply_styles(&mut elem);
+                    elements.push(elem);
+                    // No y increment for inline elements
+                    return;
+                }
+                "textarea" => {
+                    let text = extract_text(handle);
+                    let placeholder = get_attr(&attrs_ref, "placeholder");
+                    let name = get_attr(&attrs_ref, "name");
+
+                    let mut elem = create_styled_element(ElementKind::Textarea, String::new(), *y, indent);
+                    elem.form_attrs = Some(FormAttributes {
+                        input_type: "textarea".to_string(),
+                        name,
+                        id: get_attr(&attrs_ref, "id"),
+                        placeholder,
+                        value: text,
+                        form_action: form_ctx.action.clone(),
+                        form_method: form_ctx.method.clone(),
+                        ..Default::default()
+                    });
+                    apply_styles(&mut elem);
+                    elements.push(elem);
+                    *y += 2.0;
+                    return;
+                }
+                "select" => {
+                    let name = get_attr(&attrs_ref, "name");
+                    let mut options: Vec<(String, String)> = Vec::new();
+
+                    for child in handle.children.borrow().iter() {
+                        if let NodeData::Element { name: child_name, attrs: child_attrs, .. } = &child.data {
+                            if child_name.local.as_ref() == "option" {
+                                let child_attrs = child_attrs.borrow();
+                                let opt_value = child_attrs.iter()
+                                    .find(|a| a.name.local.as_ref() == "value")
+                                    .map(|a| a.value.to_string())
+                                    .unwrap_or_default();
+                                let opt_text = extract_text(child);
+                                options.push((opt_value, opt_text));
+                            }
+                        }
+                    }
+
+                    let mut elem = create_styled_element(ElementKind::Select, String::new(), *y, indent);
+                    elem.is_inline = true;
+                    elem.form_attrs = Some(FormAttributes {
+                        input_type: "select".to_string(),
+                        name,
+                        id: get_attr(&attrs_ref, "id"),
+                        options,
+                        form_action: form_ctx.action.clone(),
+                        form_method: form_ctx.method.clone(),
+                        ..Default::default()
+                    });
+                    apply_styles(&mut elem);
+                    elements.push(elem);
+                    // No y increment for inline elements
+                    return;
+                }
+                "form" => {
+                    // Extract form action and method
+                    let action = get_attr(&attrs_ref, "action");
+                    let method = get_attr(&attrs_ref, "method").to_uppercase();
+                    let method = if method.is_empty() { "GET".to_string() } else { method };
+
+                    let new_form_ctx = FormContext {
+                        action: if action.is_empty() { None } else { Some(resolve_url(&action, base_url)) },
+                        method,
+                    };
+
+                    for child in handle.children.borrow().iter() {
+                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, &new_form_ctx, depth + 1);
+                    }
+                    return;
+                }
+                "label" => {
+                    let text = extract_text(handle);
+                    if !text.is_empty() {
+                        let mut elem = create_styled_element(ElementKind::Label, text, *y, indent);
+                        elem.is_inline = true;
+                        apply_styles(&mut elem);
+                        elements.push(elem);
+                        // No y increment for inline elements
+                    }
+                    return;
                 }
                 _ => {}
             }
 
             // Recurse into children
             for child in handle.children.borrow().iter() {
-                extract_content_with_css(child, elements, title, y, indent, base_url, css_rules);
+                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
             }
         }
         NodeData::Text { contents } => {
@@ -1873,7 +2549,7 @@ fn extract_content_with_css(
         }
         NodeData::Document => {
             for child in handle.children.borrow().iter() {
-                extract_content_with_css(child, elements, title, y, indent, base_url, css_rules);
+                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
             }
         }
         _ => {}
@@ -2005,6 +2681,19 @@ fn apply_css_property(property: &str, value: &str, style: &mut ElementStyle) {
                 style.color[3] = (opacity * 255.0) as u8;
             }
         }
+        "display" => {
+            style.display = match value.to_lowercase().as_str() {
+                "none" => DisplayMode::None,
+                "inline" => DisplayMode::Inline,
+                "inline-block" => DisplayMode::InlineBlock,
+                "flex" => DisplayMode::Flex,
+                "block" => DisplayMode::Block,
+                _ => DisplayMode::Block,
+            };
+        }
+        "visibility" => {
+            style.visible = value.to_lowercase() != "hidden";
+        }
         _ => {}
     }
 }
@@ -2044,6 +2733,28 @@ fn extract_text(handle: &Handle) -> String {
 
     collect(handle, &mut text);
     text
+}
+
+/// Helper to get an attribute value from attrs
+fn get_attr(attrs: &[html5ever::Attribute], name: &str) -> String {
+    attrs.iter()
+        .find(|a| a.name.local.as_ref() == name)
+        .map(|a| a.value.to_string())
+        .unwrap_or_default()
+}
+
+/// Extract title from SVG element
+fn extract_svg_title(handle: &Handle) -> String {
+    use markup5ever_rcdom::NodeData;
+
+    for child in handle.children.borrow().iter() {
+        if let NodeData::Element { name, .. } = &child.data {
+            if name.local.as_ref() == "title" {
+                return extract_text(child);
+            }
+        }
+    }
+    String::new()
 }
 
 /// Manages multiple tabs

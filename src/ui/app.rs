@@ -20,6 +20,12 @@ pub struct BrowserApp {
     image_cache: SharedImageCache,
     /// Loaded textures for egui
     textures: HashMap<String, egui::TextureHandle>,
+    /// Form field values (keyed by element id or name)
+    form_values: HashMap<String, String>,
+    /// Checkbox/radio states
+    form_checks: HashMap<String, bool>,
+    /// Pending form submission URL (to navigate after render)
+    pending_form_submit: Option<String>,
 }
 
 impl BrowserApp {
@@ -28,14 +34,30 @@ impl BrowserApp {
         let mut tabs = TabManager::new();
         tabs.create_tab();
 
+        // Check for initial URL from command line
+        let initial_url = INITIAL_URL.with(|url| url.borrow_mut().take());
+
+        let url_input = if let Some(ref url) = initial_url {
+            // Navigate to the initial URL
+            if let Some(tab) = tabs.active_tab_mut() {
+                tab.navigate(url);
+            }
+            url.clone()
+        } else {
+            String::new()
+        };
+
         Self {
             config: UiConfig::default(),
             tabs,
-            url_input: String::new(),
+            url_input,
             show_settings: false,
             show_devtools: false,
             image_cache: create_shared_cache(),
             textures: HashMap::new(),
+            form_values: HashMap::new(),
+            form_checks: HashMap::new(),
+            pending_form_submit: None,
         }
     }
 
@@ -115,18 +137,38 @@ impl BrowserApp {
     /// Render the toolbar
     fn render_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            // Check navigation state
+            let can_go_back = self.tabs.active_tab().map(|t| t.can_go_back()).unwrap_or(false);
+            let can_go_forward = self.tabs.active_tab().map(|t| t.can_go_forward()).unwrap_or(false);
+
             // Navigation buttons
-            if ui.button("←").clicked() {
-                // TODO: Go back
+            let back_btn = egui::Button::new("←");
+            if ui.add_enabled(can_go_back, back_btn).clicked() {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.go_back();
+                    self.url_input = tab.url().to_string();
+                }
             }
-            if ui.button("→").clicked() {
-                // TODO: Go forward
+
+            let forward_btn = egui::Button::new("→");
+            if ui.add_enabled(can_go_forward, forward_btn).clicked() {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.go_forward();
+                    self.url_input = tab.url().to_string();
+                }
             }
+
             if ui.button("⟳").clicked() {
-                // TODO: Reload
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.reload();
+                }
             }
+
             if ui.button("🏠").clicked() {
                 self.url_input = "about:home".to_string();
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.navigate("about:home");
+                }
             }
 
             // URL bar
@@ -232,17 +274,211 @@ impl BrowserApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
+                let available_width = ui.available_width();
+                ui.set_min_width(available_width);
 
-                for element in &content.elements {
-                    self.render_element(ui, element);
+                // Group consecutive inline elements
+                let mut i = 0;
+                while i < content.elements.len() {
+                    let element = &content.elements[i];
+
+                    if element.is_inline {
+                        // Collect all consecutive inline elements
+                        let mut inline_group: Vec<&super::RenderElement> = vec![element];
+                        let mut j = i + 1;
+                        while j < content.elements.len() && content.elements[j].is_inline {
+                            inline_group.push(&content.elements[j]);
+                            j += 1;
+                        }
+
+                        // Check alignment of first element in group
+                        let align = inline_group.first().map(|e| e.style.text_align).unwrap_or_default();
+
+                        // Apply alignment
+                        match align {
+                            super::TextAlign::Center => {
+                                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        for elem in &inline_group {
+                                            self.render_inline_element(ui, elem);
+                                        }
+                                    });
+                                });
+                            }
+                            super::TextAlign::Right => {
+                                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        for elem in &inline_group {
+                                            self.render_inline_element(ui, elem);
+                                        }
+                                    });
+                                });
+                            }
+                            _ => {
+                                // Left or Justify - default behavior
+                                ui.horizontal_wrapped(|ui| {
+                                    for elem in &inline_group {
+                                        self.render_inline_element(ui, elem);
+                                    }
+                                });
+                            }
+                        }
+
+                        i = j;
+                    } else {
+                        // Apply block-level alignment
+                        let align = element.style.text_align;
+                        match align {
+                            super::TextAlign::Center => {
+                                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                    self.render_element(ui, element);
+                                });
+                            }
+                            super::TextAlign::Right => {
+                                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {
+                                    self.render_element(ui, element);
+                                });
+                            }
+                            _ => {
+                                self.render_element(ui, element);
+                            }
+                        }
+                        i += 1;
+                    }
                 }
             });
     }
 
+    /// Render an inline element (no line breaks)
+    fn render_inline_element(&mut self, ui: &mut egui::Ui, element: &super::RenderElement) {
+        use super::DisplayMode;
+
+        let style = &element.style;
+
+        // Skip hidden elements
+        if style.display == DisplayMode::None || !style.visible {
+            return;
+        }
+
+        // Create styled text
+        let mut rich_text = egui::RichText::new(&element.text).size(style.font_size);
+        rich_text = rich_text.color(egui::Color32::from_rgba_unmultiplied(
+            style.color[0], style.color[1], style.color[2], style.color[3],
+        ));
+        if style.font_weight_bold {
+            rich_text = rich_text.strong();
+        }
+
+        match &element.kind {
+            super::ElementKind::Label => {
+                ui.label(rich_text);
+            }
+            super::ElementKind::Input => {
+                let key = element.form_attrs.as_ref()
+                    .map(|f| if !f.id.is_empty() { f.id.clone() } else { f.name.clone() })
+                    .unwrap_or_else(|| format!("input_{}", element.bounds.y as u32));
+                let placeholder = element.form_attrs.as_ref()
+                    .map(|f| f.placeholder.clone())
+                    .unwrap_or_default();
+                let value = self.form_values.entry(key).or_insert_with(|| {
+                    element.form_attrs.as_ref().map(|f| f.value.clone()).unwrap_or_default()
+                });
+                ui.add(egui::TextEdit::singleline(value).hint_text(&placeholder).desired_width(120.0));
+            }
+            super::ElementKind::Button => {
+                // Get form action if this is a submit button
+                let form_action = element.form_attrs.as_ref()
+                    .and_then(|f| f.form_action.clone());
+
+                let bg = style.background_color.unwrap_or([59, 130, 246, 255]);
+                let btn = egui::Button::new(rich_text)
+                    .fill(egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]));
+                if ui.add(btn).clicked() {
+                    if let Some(action) = form_action {
+                        // Collect all form values and build query string
+                        let mut query_parts: Vec<String> = Vec::new();
+                        for (key, value) in &self.form_values {
+                            if !value.is_empty() {
+                                query_parts.push(format!("{}={}", url_encode(key), url_encode(value)));
+                            }
+                        }
+                        let submit_url = if query_parts.is_empty() {
+                            action
+                        } else if action.contains('?') {
+                            format!("{}&{}", action, query_parts.join("&"))
+                        } else {
+                            format!("{}?{}", action, query_parts.join("&"))
+                        };
+                        self.pending_form_submit = Some(submit_url);
+                    }
+                }
+            }
+            super::ElementKind::Checkbox => {
+                let key = element.form_attrs.as_ref()
+                    .map(|f| if !f.id.is_empty() { f.id.clone() } else { f.name.clone() })
+                    .unwrap_or_else(|| format!("cb_{}", element.bounds.y as u32));
+                let checked = self.form_checks.entry(key).or_insert_with(|| {
+                    element.form_attrs.as_ref().map(|f| f.checked).unwrap_or(false)
+                });
+                ui.checkbox(checked, "");
+            }
+            super::ElementKind::Radio => {
+                let key = element.form_attrs.as_ref()
+                    .map(|f| f.name.clone())
+                    .unwrap_or_else(|| format!("radio_{}", element.bounds.y as u32));
+                let value = element.form_attrs.as_ref()
+                    .map(|f| f.value.clone())
+                    .unwrap_or_default();
+                let current = self.form_values.entry(key).or_insert_with(|| {
+                    if element.form_attrs.as_ref().map(|f| f.checked).unwrap_or(false) {
+                        value.clone()
+                    } else {
+                        String::new()
+                    }
+                });
+                ui.radio_value(current, value, "");
+            }
+            super::ElementKind::Select => {
+                let key = element.form_attrs.as_ref()
+                    .map(|f| if !f.id.is_empty() { f.id.clone() } else { f.name.clone() })
+                    .unwrap_or_else(|| format!("select_{}", element.bounds.y as u32));
+                let options: Vec<(String, String)> = element.form_attrs.as_ref()
+                    .map(|f| f.options.clone())
+                    .unwrap_or_default();
+                let current = self.form_values.entry(key.clone()).or_insert_with(|| {
+                    options.first().map(|(v, _)| v.clone()).unwrap_or_default()
+                });
+                let selected = options.iter().find(|(v, _)| v == current).map(|(_, l)| l.as_str()).unwrap_or("Select...");
+                egui::ComboBox::from_id_salt(&key).width(120.0).selected_text(selected).show_ui(ui, |ui| {
+                    for (v, l) in &options { ui.selectable_value(current, v.clone(), l); }
+                });
+            }
+            super::ElementKind::Link => {
+                if ui.link(rich_text).clicked() {
+                    if let Some(href) = &element.href {
+                        self.url_input = href.clone();
+                        if let Some(tab) = self.tabs.active_tab_mut() {
+                            tab.navigate(href);
+                        }
+                    }
+                }
+            }
+            _ => {
+                ui.label(rich_text);
+            }
+        }
+    }
+
     /// Render a single element with its CSS styles
     fn render_element(&mut self, ui: &mut egui::Ui, element: &super::RenderElement) {
+        use super::DisplayMode;
+
         let style = &element.style;
+
+        // Skip hidden elements
+        if style.display == DisplayMode::None || !style.visible {
+            return;
+        }
 
         // Apply margin (top)
         if style.margin[0] > 0.0 {
@@ -413,27 +649,160 @@ impl BrowserApp {
                     let _ = available_width; // Suppress warning
                 }
                 ElementKind::Button => {
+                    // Get form action if this is a submit button
+                    let form_action = element.form_attrs.as_ref()
+                        .and_then(|f| f.form_action.clone());
+
                     // Render button
                     let bg = style.background_color.unwrap_or([59, 130, 246, 255]);
-                    if ui.add(egui::Button::new(rich_text)
-                        .fill(egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]))
-                    ).clicked() {
-                        // Button click handling would go here
+                    let btn = egui::Button::new(rich_text)
+                        .fill(egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]));
+                    if ui.add(btn).clicked() {
+                        if let Some(action) = form_action {
+                            // Collect all form values and build query string
+                            let mut query_parts: Vec<String> = Vec::new();
+                            for (key, value) in &self.form_values {
+                                if !value.is_empty() {
+                                    query_parts.push(format!("{}={}", url_encode(key), url_encode(value)));
+                                }
+                            }
+                            let submit_url = if query_parts.is_empty() {
+                                action
+                            } else if action.contains('?') {
+                                format!("{}&{}", action, query_parts.join("&"))
+                            } else {
+                                format!("{}?{}", action, query_parts.join("&"))
+                            };
+                            self.pending_form_submit = Some(submit_url);
+                        }
                     }
                 }
                 ElementKind::Input => {
-                    // Render input field placeholder
-                    egui::Frame::NONE
-                        .fill(egui::Color32::from_rgb(255, 255, 255))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 200)))
-                        .inner_margin(8)
-                        .corner_radius(4)
-                        .show(ui, |ui| {
-                            ui.label(rich_text.weak());
+                    // Get form key for this input
+                    let input_name = element.form_attrs.as_ref()
+                        .map(|f| f.name.clone())
+                        .unwrap_or_default();
+                    let key = element.form_attrs.as_ref()
+                        .map(|f| if !f.id.is_empty() { f.id.clone() } else { f.name.clone() })
+                        .unwrap_or_else(|| format!("input_{}", element.bounds.y as u32));
+
+                    let placeholder = element.form_attrs.as_ref()
+                        .map(|f| f.placeholder.clone())
+                        .unwrap_or_default();
+
+                    // Get form action if available
+                    let form_action = element.form_attrs.as_ref()
+                        .and_then(|f| f.form_action.clone());
+
+                    // Get or create value
+                    let value = self.form_values.entry(key.clone()).or_insert_with(|| {
+                        element.form_attrs.as_ref().map(|f| f.value.clone()).unwrap_or_default()
+                    });
+
+                    // Render actual text input
+                    let response = ui.add(
+                        egui::TextEdit::singleline(value)
+                            .hint_text(&placeholder)
+                            .desired_width(200.0)
+                    );
+
+                    // Check if Enter was pressed to submit the form
+                    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if let Some(action) = form_action {
+                            // Build form submission URL with query parameters
+                            let query_value = value.clone();
+                            let encoded_name = url_encode(&input_name);
+                            let encoded_value = url_encode(&query_value);
+                            let submit_url = if action.contains('?') {
+                                format!("{}&{}={}", action, encoded_name, encoded_value)
+                            } else {
+                                format!("{}?{}={}", action, encoded_name, encoded_value)
+                            };
+                            self.pending_form_submit = Some(submit_url);
+                        }
+                    }
+                }
+                ElementKind::Textarea => {
+                    let key = element.form_attrs.as_ref()
+                        .map(|f| if !f.id.is_empty() { f.id.clone() } else { f.name.clone() })
+                        .unwrap_or_else(|| format!("textarea_{}", element.bounds.y as u32));
+
+                    let placeholder = element.form_attrs.as_ref()
+                        .map(|f| f.placeholder.clone())
+                        .unwrap_or_default();
+
+                    let value = self.form_values.entry(key).or_insert_with(|| {
+                        element.form_attrs.as_ref().map(|f| f.value.clone()).unwrap_or_default()
+                    });
+
+                    ui.add(
+                        egui::TextEdit::multiline(value)
+                            .hint_text(&placeholder)
+                            .desired_width(300.0)
+                            .desired_rows(3)
+                    );
+                }
+                ElementKind::Select => {
+                    let key = element.form_attrs.as_ref()
+                        .map(|f| if !f.id.is_empty() { f.id.clone() } else { f.name.clone() })
+                        .unwrap_or_else(|| format!("select_{}", element.bounds.y as u32));
+
+                    let options: Vec<(String, String)> = element.form_attrs.as_ref()
+                        .map(|f| f.options.clone())
+                        .unwrap_or_default();
+
+                    let current = self.form_values.entry(key.clone()).or_insert_with(|| {
+                        options.first().map(|(v, _)| v.clone()).unwrap_or_default()
+                    });
+
+                    let selected_label = options.iter()
+                        .find(|(v, _)| v == current)
+                        .map(|(_, l)| l.as_str())
+                        .unwrap_or("Select...");
+
+                    egui::ComboBox::from_id_salt(&key)
+                        .width(200.0)
+                        .selected_text(selected_label)
+                        .show_ui(ui, |ui| {
+                            for (value, label) in &options {
+                                ui.selectable_value(current, value.clone(), label);
+                            }
                         });
+                }
+                ElementKind::Checkbox => {
+                    let key = element.form_attrs.as_ref()
+                        .map(|f| if !f.id.is_empty() { f.id.clone() } else { f.name.clone() })
+                        .unwrap_or_else(|| format!("cb_{}", element.bounds.y as u32));
+
+                    let checked = self.form_checks.entry(key).or_insert_with(|| {
+                        element.form_attrs.as_ref().map(|f| f.checked).unwrap_or(false)
+                    });
+
+                    ui.checkbox(checked, "");
+                }
+                ElementKind::Radio => {
+                    let key = element.form_attrs.as_ref()
+                        .map(|f| f.name.clone())
+                        .unwrap_or_else(|| format!("radio_{}", element.bounds.y as u32));
+                    let value = element.form_attrs.as_ref()
+                        .map(|f| f.value.clone())
+                        .unwrap_or_default();
+
+                    let current = self.form_values.entry(key).or_insert_with(|| {
+                        if element.form_attrs.as_ref().map(|f| f.checked).unwrap_or(false) {
+                            value.clone()
+                        } else {
+                            String::new()
+                        }
+                    });
+
+                    ui.radio_value(current, value.clone(), "");
                 }
                 ElementKind::Label => {
                     ui.label(rich_text);
+                }
+                ElementKind::Form => {
+                    // Forms are containers, handled by children
                 }
             }
         });
@@ -571,11 +940,24 @@ impl eframe::App for BrowserApp {
         if self.show_settings {
             self.render_settings(ctx);
         }
+
+        // Process pending form submissions
+        if let Some(submit_url) = self.pending_form_submit.take() {
+            if let Some(tab) = self.tabs.active_tab_mut() {
+                self.url_input = submit_url.clone();
+                tab.navigate(&submit_url);
+            }
+        }
     }
 }
 
-/// Run the browser application
-pub fn run() -> eframe::Result<()> {
+/// Run the browser application with an optional initial URL
+pub fn run(initial_url: Option<String>) -> eframe::Result<()> {
+    // Store initial URL in a thread-local or use lazy_static
+    INITIAL_URL.with(|url| {
+        *url.borrow_mut() = initial_url;
+    });
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
@@ -589,6 +971,10 @@ pub fn run() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(BrowserApp::new(cc)))),
     )
+}
+
+thread_local! {
+    static INITIAL_URL: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
 }
 
 #[cfg(test)]
@@ -634,4 +1020,25 @@ fn load_image_blocking(url: &str) -> Result<egui::ColorImage, String> {
         .map_err(|e| format!("Failed to read image data: {}", e))?;
 
     super::decode_image(&bytes)
+}
+
+/// URL-encode a string for use in query parameters
+fn url_encode(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() * 3);
+    for c in s.chars() {
+        match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => {
+                result.push(c);
+            }
+            ' ' => {
+                result.push('+');
+            }
+            _ => {
+                for byte in c.to_string().as_bytes() {
+                    result.push_str(&format!("%{:02X}", byte));
+                }
+            }
+        }
+    }
+    result
 }

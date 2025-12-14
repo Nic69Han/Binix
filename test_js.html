@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>JavaScript Test Page</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { color: #333; }
+        .result { background: #f0f0f0; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>JavaScript Test Page</h1>
+    <p>This page tests JavaScript execution in Binix.</p>
+    
+    <div class="result" id="output">
+        <p>JavaScript output will appear here...</p>
+    </div>
+    
+    <script>
+        console.log("=== BASIC APIs ===");
+        console.log("2 + 2 = " + (2 + 2));
+        console.log("Window size: " + window.innerWidth + "x" + window.innerHeight);
+        console.log("Document readyState: " + document.readyState);
+        console.log("Navigator: " + navigator.userAgent);
+        console.log("Location: " + location.href);
+
+        console.log("\n=== DOM APIs ===");
+        console.log("document.body exists: " + (document.body !== null));
+        console.log("document.body.tagName: " + document.body.tagName);
+        console.log("document.head exists: " + (document.head !== null));
+        console.log("document.documentElement.tagName: " + document.documentElement.tagName);
+
+        console.log("\n=== CONSTRUCTORS ===");
+        var img = new Image(100, 50);
+        console.log("new Image(): width=" + img.width + ", height=" + img.height);
+
+        var mo = new MutationObserver(function(){});
+        console.log("new MutationObserver(): " + (typeof mo.observe));
+
+        var ro = new ResizeObserver(function(){});
+        console.log("new ResizeObserver(): " + (typeof ro.observe));
+
+        var io = new IntersectionObserver(function(){});
+        console.log("new IntersectionObserver(): " + (typeof io.observe));
+
+        console.log("\n=== ADVANCED APIs ===");
+        console.log("performance.now(): " + performance.now().toFixed(2) + "ms");
+        console.log("history.length: " + history.length);
+        console.log("crypto exists: " + (typeof crypto));
+        console.log("btoa('hello'): " + btoa("hello"));
+        console.log("atob('aGVsbG8='): " + atob("aGVsbG8="));
+
+        var url = new URL("https://example.com/path?query=1#hash");
+        console.log("URL.hostname: " + url.hostname);
+        console.log("URL.pathname: " + url.pathname);
+
+        console.log("\n=== EVENT APIs ===");
+        var evt = new Event("click");
+        console.log("new Event('click').type: " + evt.type);
+
+        var customEvt = new CustomEvent("myevent");
+        console.log("new CustomEvent('myevent').type: " + customEvt.type);
+
+        console.log("\n=== UTILITY CLASSES ===");
+        var blob = new Blob(["hello"], {type: "text/plain"});
+        console.log("new Blob().type: " + blob.type);
+
+        var formData = new FormData();
+        formData.set("key", "value");
+        console.log("FormData.has('key'): " + formData.has("key"));
+
+        var te = new TextEncoder();
+        console.log("TextEncoder.encoding: " + te.encoding);
+
+        var ac = new AbortController();
+        console.log("AbortController.signal.aborted: " + ac.signal.aborted);
+
+        console.log("\n=== ALL TESTS PASSED! ===");
+    </script>
+</body>
+</html>
+

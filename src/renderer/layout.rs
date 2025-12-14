@@ -1151,6 +1151,8 @@ fn collect_render_elements(layout: &LayoutBox, elements: &mut Vec<crate::ui::Ren
                 src: None,
                 alt: None,
                 children: Vec::new(),
+                form_attrs: None,
+                is_inline: false,
             };
 
             elements.push(element);

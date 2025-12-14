@@ -2,13 +2,17 @@
 //!
 //! Provides integration with Boa JavaScript engine (pure Rust) and DOM bindings.
 
+mod advanced_apis;
 mod dom_bindings;
 mod fetch_api;
 mod runtime;
+mod web_apis;
 
 pub use dom_bindings::{DomBindings, DomNode, DomNodeType, Event, EventCallback, NodeId};
 pub use fetch_api::{FetchClient, FetchRequest, FetchResponse, XmlHttpRequest, ReadyState};
 pub use runtime::JsRuntime;
+pub use web_apis::init_web_apis;
+pub use advanced_apis::init_advanced_apis;
 
 use crate::utils::Result;
 

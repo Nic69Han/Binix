@@ -1,8 +1,13 @@
 //! JavaScript runtime implementation using Boa engine
 
-use super::{JsCallback, JsValue};
+use super::{JsCallback, JsValue, web_apis, advanced_apis};
 use crate::utils::{Result, error::JsError};
-use boa_engine::{Context, JsValue as BoaJsValue, Source};
+use boa_engine::{
+    Context, JsValue as BoaJsValue, Source,
+    object::ObjectInitializer,
+    property::Attribute,
+    NativeFunction,
+};
 use std::collections::HashMap;
 
 /// JavaScript runtime context using Boa engine
@@ -14,10 +19,78 @@ pub struct JsRuntime {
 impl JsRuntime {
     /// Create a new JavaScript runtime
     pub fn new() -> Self {
+        Self::with_url("about:blank")
+    }
+
+    /// Create a new JavaScript runtime with a specific URL context
+    pub fn with_url(url: &str) -> Self {
+        let mut context = Context::default();
+
+        // Initialize console object
+        Self::init_console(&mut context);
+
+        // Initialize Web APIs (window, document, setTimeout, etc.)
+        web_apis::init_web_apis(&mut context, url);
+
+        // Initialize advanced APIs (Image, MutationObserver, performance, etc.)
+        advanced_apis::init_advanced_apis(&mut context);
+
         Self {
-            context: Context::default(),
+            context,
             global_functions: HashMap::new(),
         }
+    }
+
+    /// Initialize the console object with log, warn, error methods
+    fn init_console(context: &mut Context) {
+        // Create console.log function
+        let log_fn = NativeFunction::from_copy_closure(|_this, args, ctx| {
+            let message = format_console_args(args, ctx);
+            println!("[JS] {}", message);
+            log::info!("[JS console.log] {}", message);
+            Ok(BoaJsValue::undefined())
+        });
+
+        // Create console.warn function
+        let warn_fn = NativeFunction::from_copy_closure(|_this, args, ctx| {
+            let message = format_console_args(args, ctx);
+            eprintln!("[JS WARN] {}", message);
+            log::warn!("[JS console.warn] {}", message);
+            Ok(BoaJsValue::undefined())
+        });
+
+        // Create console.error function
+        let error_fn = NativeFunction::from_copy_closure(|_this, args, ctx| {
+            let message = format_console_args(args, ctx);
+            eprintln!("[JS ERROR] {}", message);
+            log::error!("[JS console.error] {}", message);
+            Ok(BoaJsValue::undefined())
+        });
+
+        // Create console.info function
+        let info_fn = NativeFunction::from_copy_closure(|_this, args, ctx| {
+            let message = format_console_args(args, ctx);
+            println!("[JS INFO] {}", message);
+            log::info!("[JS console.info] {}", message);
+            Ok(BoaJsValue::undefined())
+        });
+
+        // Build console object
+        let console = ObjectInitializer::new(context)
+            .function(log_fn, boa_engine::js_string!("log"), 0)
+            .function(warn_fn, boa_engine::js_string!("warn"), 0)
+            .function(error_fn, boa_engine::js_string!("error"), 0)
+            .function(info_fn, boa_engine::js_string!("info"), 0)
+            .build();
+
+        // Register console as a global object
+        context
+            .register_global_property(
+                boa_engine::js_string!("console"),
+                console,
+                Attribute::all(),
+            )
+            .expect("Failed to register console object");
     }
 
     /// Execute JavaScript code
@@ -81,6 +154,35 @@ impl JsRuntime {
             JsValue::Undefined
         }
     }
+}
+
+/// Format console arguments to a string
+fn format_console_args(args: &[BoaJsValue], context: &mut Context) -> String {
+    args.iter()
+        .map(|arg| {
+            if arg.is_undefined() {
+                "undefined".to_string()
+            } else if arg.is_null() {
+                "null".to_string()
+            } else if let Some(s) = arg.as_string() {
+                s.to_std_string_escaped()
+            } else if let Some(n) = arg.as_number() {
+                n.to_string()
+            } else if let Some(b) = arg.as_boolean() {
+                b.to_string()
+            } else if arg.is_object() {
+                // Try to stringify object
+                if let Ok(Some(json)) = arg.to_json(context) {
+                    format!("{}", json)
+                } else {
+                    "[object Object]".to_string()
+                }
+            } else {
+                format!("{:?}", arg)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl Default for JsRuntime {
