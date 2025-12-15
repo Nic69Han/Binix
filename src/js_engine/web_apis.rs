@@ -95,6 +95,8 @@ pub fn init_web_apis(context: &mut Context, current_url: &str) {
     init_local_storage(context);
     init_navigator(context);
     init_location(context, current_url);
+    init_fetch(context);
+    init_xmlhttprequest(context);
 }
 
 /// Initialize the window object
@@ -615,3 +617,258 @@ fn parse_url(url: &str) -> (String, String, String, String, String) {
     (protocol, host, pathname, search, hash)
 }
 
+/// Initialize fetch() API
+fn init_fetch(context: &mut Context) {
+    use crate::js_engine::fetch_api::{FetchClient, FetchRequest, FetchMethod};
+
+    // Create the fetch function
+    // Note: fetch() should return a Promise, but for simplicity we make it synchronous
+    // and wrap in a resolved Promise
+    let fetch_fn = NativeFunction::from_copy_closure(|_this, args, ctx| {
+        let url = args.get_or_undefined(0).to_string(ctx)?;
+        let url_str = url.to_std_string_escaped();
+
+        // Parse options if provided
+        let options = args.get_or_undefined(1);
+        let mut method = FetchMethod::Get;
+        let mut body: Option<String> = None;
+        let mut headers = std::collections::HashMap::new();
+
+        if options.is_object() {
+            if let Some(obj) = options.as_object() {
+                // Get method
+                if let Ok(method_val) = obj.get(boa_engine::js_string!("method"), ctx) {
+                    if let Ok(m) = method_val.to_string(ctx) {
+                        method = FetchMethod::from_str(&m.to_std_string_escaped());
+                    }
+                }
+
+                // Get body
+                if let Ok(body_val) = obj.get(boa_engine::js_string!("body"), ctx) {
+                    if !body_val.is_undefined() && !body_val.is_null() {
+                        if let Ok(b) = body_val.to_string(ctx) {
+                            body = Some(b.to_std_string_escaped());
+                        }
+                    }
+                }
+
+                // Get headers
+                if let Ok(headers_val) = obj.get(boa_engine::js_string!("headers"), ctx) {
+                    if let Some(headers_obj) = headers_val.as_object() {
+                        // Simple header extraction - just common ones
+                        for key in ["Content-Type", "Accept", "Authorization"] {
+                            if let Ok(val) = headers_obj.get(boa_engine::js_string!(key), ctx) {
+                                if !val.is_undefined() {
+                                    if let Ok(v) = val.to_string(ctx) {
+                                        headers.insert(key.to_string(), v.to_std_string_escaped());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build request
+        let request = FetchRequest {
+            url: url_str.clone(),
+            method,
+            headers,
+            body,
+            ..Default::default()
+        };
+
+        // Execute fetch synchronously
+        let client = FetchClient::new();
+        let result = client.fetch(request);
+
+        // Build Response object
+        match result {
+            Ok(response) => {
+                let status = response.status;
+                let ok = response.ok;
+                let body_text = response.text();
+                let response_url = response.url.clone();
+
+                // Escape body for JavaScript string
+                let escaped_body = body_text
+                    .replace('\\', "\\\\")
+                    .replace('`', "\\`")
+                    .replace("${", "\\${");
+
+                // Create response object using JavaScript to avoid closure issues
+                let js_code = format!(
+                    r#"(function() {{
+                        var _body = `{}`;
+                        return {{
+                            status: {},
+                            ok: {},
+                            url: "{}",
+                            headers: new Headers(),
+                            text: function() {{ return Promise.resolve(_body); }},
+                            json: function() {{ return Promise.resolve(JSON.parse(_body)); }},
+                            clone: function() {{ return this; }}
+                        }};
+                    }})()"#,
+                    escaped_body,
+                    status,
+                    ok,
+                    response_url.replace('"', "\\\"")
+                );
+
+                ctx.eval(boa_engine::Source::from_bytes(js_code.as_bytes()))
+                    .map_err(|e| boa_engine::JsError::from_opaque(BoaJsValue::from(
+                        boa_engine::js_string!(e.to_string().as_str())
+                    )))
+            }
+            Err(e) => {
+                // Return a rejected state
+                log::warn!("Fetch error: {}", e);
+                Err(boa_engine::JsError::from_opaque(BoaJsValue::from(
+                    boa_engine::js_string!(format!("Network error: {}", e).as_str())
+                )))
+            }
+        }
+    });
+
+    context
+        .register_global_builtin_callable(boa_engine::js_string!("fetch"), 2, fetch_fn)
+        .expect("Failed to register fetch");
+}
+
+/// Initialize XMLHttpRequest class
+fn init_xmlhttprequest(context: &mut Context) {
+    // Define XMLHttpRequest as a JavaScript class with native backing
+    let xhr_js = r#"
+        function XMLHttpRequest() {
+            this.readyState = 0;
+            this.status = 0;
+            this.statusText = '';
+            this.responseText = '';
+            this.responseXML = null;
+            this.response = '';
+            this.responseType = '';
+            this.timeout = 0;
+            this.withCredentials = false;
+            this._method = 'GET';
+            this._url = '';
+            this._async = true;
+            this._headers = {};
+            this._responseHeaders = {};
+
+            // Event handlers
+            this.onreadystatechange = null;
+            this.onload = null;
+            this.onerror = null;
+            this.onprogress = null;
+            this.onloadstart = null;
+            this.onloadend = null;
+            this.ontimeout = null;
+            this.onabort = null;
+        }
+
+        XMLHttpRequest.UNSENT = 0;
+        XMLHttpRequest.OPENED = 1;
+        XMLHttpRequest.HEADERS_RECEIVED = 2;
+        XMLHttpRequest.LOADING = 3;
+        XMLHttpRequest.DONE = 4;
+
+        XMLHttpRequest.prototype.open = function(method, url, async) {
+            this._method = method || 'GET';
+            this._url = url || '';
+            this._async = async !== false;
+            this.readyState = 1;
+            this._fireReadyStateChange();
+        };
+
+        XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+            this._headers[name] = value;
+        };
+
+        XMLHttpRequest.prototype.getResponseHeader = function(name) {
+            return this._responseHeaders[name.toLowerCase()] || null;
+        };
+
+        XMLHttpRequest.prototype.getAllResponseHeaders = function() {
+            var result = '';
+            for (var key in this._responseHeaders) {
+                result += key + ': ' + this._responseHeaders[key] + '\r\n';
+            }
+            return result;
+        };
+
+        XMLHttpRequest.prototype.send = function(body) {
+            var self = this;
+            self.readyState = 2;
+            self._fireReadyStateChange();
+
+            // Use fetch internally (synchronous in our implementation)
+            try {
+                var options = {
+                    method: self._method,
+                    headers: self._headers
+                };
+                if (body) {
+                    options.body = body;
+                }
+
+                // Use our sync fetch
+                var response = fetch(self._url, options);
+
+                self.status = response.status;
+                self.statusText = response.ok ? 'OK' : 'Error';
+
+                // Get text synchronously (our fetch is sync)
+                var textPromise = response.text();
+                // Since our Promise.resolve is sync-ish, we handle it
+                if (textPromise && typeof textPromise.then === 'function') {
+                    textPromise.then(function(text) {
+                        self.responseText = text;
+                        self.response = text;
+                        self.readyState = 4;
+                        self._fireReadyStateChange();
+                        if (self.onload) self.onload();
+                    });
+                } else {
+                    self.responseText = '';
+                    self.response = '';
+                    self.readyState = 4;
+                    self._fireReadyStateChange();
+                    if (self.onload) self.onload();
+                }
+            } catch (e) {
+                self.status = 0;
+                self.statusText = 'Network Error';
+                self.readyState = 4;
+                self._fireReadyStateChange();
+                if (self.onerror) self.onerror(e);
+            }
+        };
+
+        XMLHttpRequest.prototype.abort = function() {
+            this.readyState = 0;
+            if (this.onabort) this.onabort();
+        };
+
+        XMLHttpRequest.prototype._fireReadyStateChange = function() {
+            if (this.onreadystatechange) {
+                this.onreadystatechange();
+            }
+        };
+
+        XMLHttpRequest.prototype.overrideMimeType = function(mime) {};
+
+        // Also create ActiveXObject for legacy IE compatibility
+        function ActiveXObject(type) {
+            if (type.indexOf('XMLHTTP') !== -1) {
+                return new XMLHttpRequest();
+            }
+            return {};
+        }
+    "#;
+
+    if let Err(e) = context.eval(boa_engine::Source::from_bytes(xhr_js)) {
+        eprintln!("Failed to initialize XMLHttpRequest: {:?}", e);
+    }
+}

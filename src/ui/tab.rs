@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex};
 use crate::js_engine::JsRuntime;
 use markup5ever_rcdom::Handle;
 
+/// User-Agent string that mimics a real browser for better site compatibility
+const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
 /// Unique tab identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TabId(u64);
@@ -121,7 +124,80 @@ pub enum DisplayMode {
     Inline,
     InlineBlock,
     Flex,
+    Grid,
     None,
+}
+
+/// CSS position property
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Position {
+    #[default]
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+    Sticky,
+}
+
+/// Flex direction for flexbox layout
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum FlexDirection {
+    #[default]
+    Row,
+    RowReverse,
+    Column,
+    ColumnReverse,
+}
+
+/// Flex wrap mode
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum FlexWrap {
+    #[default]
+    NoWrap,
+    Wrap,
+    WrapReverse,
+}
+
+/// Justify content (main axis alignment)
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum JustifyContent {
+    #[default]
+    FlexStart,
+    FlexEnd,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+/// Align items (cross axis alignment)
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum AlignItems {
+    #[default]
+    Stretch,
+    FlexStart,
+    FlexEnd,
+    Center,
+    Baseline,
+}
+
+/// Flexbox properties
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FlexProperties {
+    /// Flex direction
+    pub direction: FlexDirection,
+    /// Flex wrap
+    pub wrap: FlexWrap,
+    /// Justify content (main axis)
+    pub justify_content: JustifyContent,
+    /// Align items (cross axis)
+    pub align_items: AlignItems,
+    /// Gap between items
+    pub gap: f32,
+    /// Flex grow factor (for children)
+    pub flex_grow: f32,
+    /// Flex shrink factor (for children)
+    pub flex_shrink: f32,
 }
 
 /// Visual styling for elements
@@ -159,6 +235,20 @@ pub struct ElementStyle {
     pub display: DisplayMode,
     /// Visibility (hidden elements still take space)
     pub visible: bool,
+    /// Flexbox properties (when display: flex)
+    pub flex: FlexProperties,
+    /// CSS position property
+    pub position: Position,
+    /// Top offset (for positioned elements)
+    pub top: Option<f32>,
+    /// Right offset (for positioned elements)
+    pub right: Option<f32>,
+    /// Bottom offset (for positioned elements)
+    pub bottom: Option<f32>,
+    /// Left offset (for positioned elements)
+    pub left: Option<f32>,
+    /// Z-index for stacking order
+    pub z_index: i32,
 }
 
 impl Default for ElementStyle {
@@ -180,6 +270,13 @@ impl Default for ElementStyle {
             max_width: 0.0,
             display: DisplayMode::Block,
             visible: true,
+            flex: FlexProperties::default(),
+            position: Position::Static,
+            top: None,
+            right: None,
+            bottom: None,
+            left: None,
+            z_index: 0,
         }
     }
 }
@@ -289,6 +386,8 @@ pub enum ElementKind {
     Radio,
     Label,
     Form,
+    // Layout containers
+    Container,
 }
 
 /// A browser tab
@@ -486,7 +585,7 @@ fn fetch_and_parse(url: &str) -> PageContent {
 
     // Use blocking reqwest for simplicity in thread
     let client = reqwest::blocking::Client::builder()
-        .user_agent("Binix/0.1.0")
+        .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
         .build();
 
@@ -1118,7 +1217,7 @@ fn fetch_external_css(url: &str) -> Option<String> {
     // Use blocking reqwest for simplicity
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
-        .user_agent("Binix/0.1.0")
+        .user_agent(USER_AGENT)
         .build()
         .ok()?;
 
@@ -1139,6 +1238,22 @@ fn parse_html_to_content(html: &str, base_url: &str) -> PageContent {
     use html5ever::tendril::TendrilSink;
     use html5ever::{ParseOpts, parse_document};
     use markup5ever_rcdom::RcDom;
+
+    // Try YouTube-specific parsing first
+    if let Some(youtube_elements) = try_parse_youtube(html, base_url) {
+        let title = if base_url.contains("youtube.com") {
+            "YouTube".to_string()
+        } else {
+            "Video".to_string()
+        };
+        return PageContent {
+            title,
+            elements: youtube_elements,
+            error: None,
+            console_output: Vec::new(),
+            js_errors: Vec::new(),
+        };
+    }
 
     let opts = ParseOpts::default();
     let dom = parse_document(RcDom::default(), opts)
@@ -1333,6 +1448,7 @@ fn fetch_external_script(url: &str) -> Option<String> {
     // Use blocking reqwest for HTTP(S) URLs
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .user_agent(USER_AGENT)
         .build()
         .ok()?;
 
@@ -1515,6 +1631,9 @@ fn create_styled_element(kind: ElementKind, text: String, y: f32, indent: u32) -
         }
         ElementKind::Form => {
             style.margin = [8.0, 0.0, 8.0, 0.0];
+        }
+        ElementKind::Container => {
+            // Container has no default styling - it inherits from CSS
         }
     }
 
@@ -2244,9 +2363,48 @@ fn extract_content_with_css_inner(
                     return; // Don't process children - text already extracted
                 }
                 "div" | "section" | "article" | "main" | "header" | "footer" | "nav" => {
-                    // Container elements - always recurse into children
-                    for child in handle.children.borrow().iter() {
-                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
+                    // Create a temporary element to compute styles
+                    let mut temp_elem = create_styled_element(ElementKind::Container, String::new(), *y, indent);
+                    apply_styles(&mut temp_elem);
+
+                    // Check if this is a flex/grid container
+                    let is_flex_container = matches!(temp_elem.style.display, DisplayMode::Flex | DisplayMode::Grid);
+
+                    if is_flex_container {
+                        // Use the already styled container
+                        let mut container = temp_elem;
+
+                        // Extract children into the container - each child div becomes a flex item
+                        let mut child_elements: Vec<RenderElement> = Vec::new();
+                        for child in handle.children.borrow().iter() {
+                            extract_content_with_css_inner(child, &mut child_elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
+                        }
+                        container.children = child_elements;
+                        elements.push(container);
+                    } else {
+                        // Check if this div has only text content (no nested elements)
+                        let has_element_children = handle.children.borrow().iter().any(|child| {
+                            matches!(&child.data, NodeData::Element { .. })
+                        });
+
+                        // Check if this div has any styling (background, border, padding)
+                        let has_visual_styling = temp_elem.style.background_color.is_some()
+                            || temp_elem.style.border_color.is_some()
+                            || temp_elem.style.padding.iter().any(|&p| p > 0.0);
+
+                        if !has_element_children && has_visual_styling {
+                            // This is a styled leaf div with text - render it as a styled container
+                            let text = extract_text(handle);
+                            let mut elem = create_styled_element(ElementKind::Text, text, *y, indent);
+                            apply_styles(&mut elem);
+                            elements.push(elem);
+                            *y += 1.0;
+                        } else {
+                            // Regular container - recurse into children
+                            for child in handle.children.borrow().iter() {
+                                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
+                            }
+                        }
                     }
                     return;
                 }
@@ -2687,12 +2845,117 @@ fn apply_css_property(property: &str, value: &str, style: &mut ElementStyle) {
                 "inline" => DisplayMode::Inline,
                 "inline-block" => DisplayMode::InlineBlock,
                 "flex" => DisplayMode::Flex,
+                "grid" => DisplayMode::Grid,
                 "block" => DisplayMode::Block,
                 _ => DisplayMode::Block,
             };
         }
         "visibility" => {
             style.visible = value.to_lowercase() != "hidden";
+        }
+        // Flexbox properties
+        "flex-direction" => {
+            style.flex.direction = match value.to_lowercase().as_str() {
+                "row" => FlexDirection::Row,
+                "row-reverse" => FlexDirection::RowReverse,
+                "column" => FlexDirection::Column,
+                "column-reverse" => FlexDirection::ColumnReverse,
+                _ => FlexDirection::Row,
+            };
+        }
+        "flex-wrap" => {
+            style.flex.wrap = match value.to_lowercase().as_str() {
+                "wrap" => FlexWrap::Wrap,
+                "wrap-reverse" => FlexWrap::WrapReverse,
+                "nowrap" => FlexWrap::NoWrap,
+                _ => FlexWrap::NoWrap,
+            };
+        }
+        "justify-content" => {
+            style.flex.justify_content = match value.to_lowercase().as_str() {
+                "flex-start" | "start" => JustifyContent::FlexStart,
+                "flex-end" | "end" => JustifyContent::FlexEnd,
+                "center" => JustifyContent::Center,
+                "space-between" => JustifyContent::SpaceBetween,
+                "space-around" => JustifyContent::SpaceAround,
+                "space-evenly" => JustifyContent::SpaceEvenly,
+                _ => JustifyContent::FlexStart,
+            };
+        }
+        "align-items" => {
+            style.flex.align_items = match value.to_lowercase().as_str() {
+                "stretch" => AlignItems::Stretch,
+                "flex-start" | "start" => AlignItems::FlexStart,
+                "flex-end" | "end" => AlignItems::FlexEnd,
+                "center" => AlignItems::Center,
+                "baseline" => AlignItems::Baseline,
+                _ => AlignItems::Stretch,
+            };
+        }
+        "gap" | "grid-gap" => {
+            if let Some(size) = parse_css_size(value) {
+                style.flex.gap = size;
+            }
+        }
+        "flex-grow" => {
+            if let Ok(grow) = value.parse::<f32>() {
+                style.flex.flex_grow = grow;
+            }
+        }
+        "flex-shrink" => {
+            if let Ok(shrink) = value.parse::<f32>() {
+                style.flex.flex_shrink = shrink;
+            }
+        }
+        "flex" => {
+            // Parse shorthand: flex: grow shrink? basis?
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            if let Some(first) = parts.first() {
+                if let Ok(grow) = first.parse::<f32>() {
+                    style.flex.flex_grow = grow;
+                }
+            }
+            if let Some(second) = parts.get(1) {
+                if let Ok(shrink) = second.parse::<f32>() {
+                    style.flex.flex_shrink = shrink;
+                }
+            }
+        }
+        // CSS positioning properties
+        "position" => {
+            style.position = match value.to_lowercase().as_str() {
+                "static" => Position::Static,
+                "relative" => Position::Relative,
+                "absolute" => Position::Absolute,
+                "fixed" => Position::Fixed,
+                "sticky" => Position::Sticky,
+                _ => Position::Static,
+            };
+        }
+        "top" => {
+            if let Some(size) = parse_css_size(value) {
+                style.top = Some(size);
+            }
+        }
+        "right" => {
+            if let Some(size) = parse_css_size(value) {
+                style.right = Some(size);
+            }
+        }
+        "bottom" => {
+            if let Some(size) = parse_css_size(value) {
+                style.bottom = Some(size);
+            }
+        }
+        "left" => {
+            if let Some(size) = parse_css_size(value) {
+                style.left = Some(size);
+            }
+        }
+        "z-index" => {
+            if let Ok(z) = value.parse::<i32>() {
+                style.z_index = z;
+            }
         }
         _ => {}
     }
@@ -3131,4 +3394,573 @@ mod tests {
         // Yellow background should be applied
         assert_eq!(p.style.background_color, Some([255, 255, 0, 255]), "p should have yellow background");
     }
+}
+
+// ============================================================================
+// YouTube-specific content extraction
+// ============================================================================
+
+/// Extract ytInitialData JSON from YouTube HTML
+fn extract_yt_initial_data(html: &str) -> Option<serde_json::Value> {
+    let start_marker = "ytInitialData = ";
+    let start = html.find(start_marker);
+    if start.is_none() {
+        log::warn!("ytInitialData marker not found in HTML");
+        return None;
+    }
+    let start = start.unwrap();
+    let json_start = start + start_marker.len();
+    let remaining = &html[json_start..];
+
+    // Find the end by looking for }; or }; patterns
+    // YouTube typically ends with }; or };</script>
+    let end_markers = ["};", "};</script>", "};\n"];
+    let mut end_pos = None;
+
+    for marker in &end_markers {
+        if let Some(pos) = remaining.find(marker) {
+            let candidate = pos + 1; // Include the }
+            if end_pos.is_none() || candidate < end_pos.unwrap() {
+                end_pos = Some(candidate);
+            }
+        }
+    }
+
+    let end_pos = match end_pos {
+        Some(p) => p,
+        None => {
+            log::warn!("Could not find end of ytInitialData JSON");
+            return None;
+        }
+    };
+
+    log::info!("Found ytInitialData JSON ({} bytes)", end_pos);
+    let json_str = &remaining[..end_pos];
+
+    match serde_json::from_str(json_str) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            log::warn!("Failed to parse ytInitialData: {}", e);
+            // Try to show where the error is
+            if end_pos > 100 {
+                log::debug!("JSON end: ...{}", &json_str[end_pos.saturating_sub(100)..]);
+            }
+            None
+        }
+    }
+}
+
+/// YouTube video data
+struct YouTubeVideo {
+    video_id: String,
+    title: String,
+    thumbnail_url: String,
+    channel_name: String,
+    view_count: String,
+    duration: String,
+}
+
+/// Extract videos from ytInitialData by recursively searching for videoRenderer
+fn extract_youtube_videos(data: &serde_json::Value) -> Vec<YouTubeVideo> {
+    let mut videos = Vec::new();
+    find_video_renderers(data, &mut videos);
+    videos
+}
+
+/// Recursively find all videoRenderer objects in the JSON
+fn find_video_renderers(value: &serde_json::Value, videos: &mut Vec<YouTubeVideo>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Check if this object contains a videoRenderer
+            if let Some(renderer) = map.get("videoRenderer") {
+                if let Some(video) = extract_video_from_renderer(renderer) {
+                    videos.push(video);
+                }
+            }
+            // Also check for richItemRenderer -> content -> videoRenderer
+            if let Some(rich_item) = map.get("richItemRenderer") {
+                if let Some(content) = rich_item.get("content") {
+                    if let Some(renderer) = content.get("videoRenderer") {
+                        if let Some(video) = extract_video_from_renderer(renderer) {
+                            videos.push(video);
+                        }
+                    }
+                }
+            }
+            // Recurse into all values
+            for v in map.values() {
+                find_video_renderers(v, videos);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                find_video_renderers(v, videos);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_video_from_renderer(renderer: &serde_json::Value) -> Option<YouTubeVideo> {
+
+    let video_id = renderer.get("videoId")?.as_str()?.to_string();
+    let title = renderer.get("title")
+        .and_then(|t| t.get("runs"))
+        .and_then(|r| r.as_array())
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("Untitled").to_string();
+    let thumbnail_url = renderer.get("thumbnail")
+        .and_then(|t| t.get("thumbnails"))
+        .and_then(|t| t.as_array())
+        .and_then(|a| a.last())
+        .and_then(|t| t.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("").to_string();
+    let channel_name = renderer.get("ownerText")
+        .and_then(|o| o.get("runs"))
+        .and_then(|r| r.as_array())
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("").to_string();
+    let view_count = renderer.get("viewCountText")
+        .and_then(|v| v.get("simpleText"))
+        .and_then(|t| t.as_str())
+        .or_else(|| renderer.get("shortViewCountText")
+            .and_then(|v| v.get("simpleText"))
+            .and_then(|t| t.as_str()))
+        .unwrap_or("").to_string();
+    let duration = renderer.get("lengthText")
+        .and_then(|l| l.get("simpleText"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("").to_string();
+
+    Some(YouTubeVideo { video_id, title, thumbnail_url, channel_name, view_count, duration })
+}
+
+/// Try to parse YouTube page and return video elements
+fn try_parse_youtube(html: &str, url: &str) -> Option<Vec<RenderElement>> {
+    if !url.contains("youtube.com") && !url.contains("youtu.be") {
+        return None;
+    }
+
+    log::info!("Parsing YouTube page...");
+    let data = extract_yt_initial_data(html)?;
+
+    // Check if this is a video watch page
+    if url.contains("/watch") || url.contains("youtu.be/") {
+        return try_parse_youtube_watch_page(&data, url);
+    }
+
+    let videos = extract_youtube_videos(&data);
+    log::info!("Found {} YouTube videos", videos.len());
+
+    // If no videos found and this is the homepage, show a helpful message
+    if videos.is_empty() {
+        if url.contains("youtube.com") && !url.contains("/results") && !url.contains("/watch") && !url.contains("/@") && !url.contains("/channel") {
+            return Some(create_youtube_homepage_placeholder());
+        }
+        return None;
+    }
+
+    let mut elements = Vec::new();
+    let mut y: f32 = 10.0;
+
+    // Helper to create element
+    fn make_element(kind: ElementKind, text: String, bounds: ElementBounds, style: ElementStyle) -> RenderElement {
+        RenderElement {
+            kind,
+            text,
+            bounds,
+            style,
+            is_link: false,
+            href: None,
+            src: None,
+            alt: None,
+            children: Vec::new(),
+            form_attrs: None,
+            is_inline: false,
+        }
+    }
+
+    // Header
+    let mut header_style = ElementStyle::default();
+    header_style.font_size = 28.0;
+    header_style.font_weight_bold = true;
+    header_style.color = [255, 0, 0, 255]; // YouTube red
+    elements.push(make_element(
+        ElementKind::Heading1,
+        "📺 YouTube".to_string(),
+        ElementBounds { x: 20.0, y, width: 800.0, height: 40.0 },
+        header_style,
+    ));
+    y += 50.0;
+
+    for video in videos.iter().take(20) {
+        // Thumbnail
+        if !video.thumbnail_url.is_empty() {
+            let mut thumb = make_element(
+                ElementKind::Image,
+                String::new(),
+                ElementBounds { x: 20.0, y, width: 320.0, height: 180.0 },
+                ElementStyle::default(),
+            );
+            thumb.src = Some(video.thumbnail_url.clone());
+            thumb.alt = Some(video.title.clone());
+            elements.push(thumb);
+        }
+
+        // Duration badge
+        if !video.duration.is_empty() {
+            let mut dur_style = ElementStyle::default();
+            dur_style.font_size = 12.0;
+            dur_style.color = [255, 255, 255, 255];
+            dur_style.background_color = Some([0, 0, 0, 200]);
+            elements.push(make_element(
+                ElementKind::Text,
+                format!(" {} ", video.duration),
+                ElementBounds { x: 280.0, y: y + 150.0, width: 60.0, height: 20.0 },
+                dur_style,
+            ));
+        }
+
+        // Video title link
+        let mut title_style = ElementStyle::default();
+        title_style.font_size = 16.0;
+        title_style.font_weight_bold = true;
+        title_style.color = [30, 30, 30, 255];
+        let mut title_elem = make_element(
+            ElementKind::Link,
+            video.title.clone(),
+            ElementBounds { x: 350.0, y, width: 500.0, height: 24.0 },
+            title_style,
+        );
+        title_elem.is_link = true;
+        title_elem.href = Some(format!("https://www.youtube.com/watch?v={}", video.video_id));
+        elements.push(title_elem);
+
+        // Channel name
+        if !video.channel_name.is_empty() {
+            let mut chan_style = ElementStyle::default();
+            chan_style.font_size = 13.0;
+            chan_style.color = [96, 96, 96, 255];
+            elements.push(make_element(
+                ElementKind::Text,
+                video.channel_name.clone(),
+                ElementBounds { x: 350.0, y: y + 28.0, width: 400.0, height: 18.0 },
+                chan_style,
+            ));
+        }
+
+        // View count
+        if !video.view_count.is_empty() {
+            let mut view_style = ElementStyle::default();
+            view_style.font_size = 13.0;
+            view_style.color = [96, 96, 96, 255];
+            elements.push(make_element(
+                ElementKind::Text,
+                video.view_count.clone(),
+                ElementBounds { x: 350.0, y: y + 48.0, width: 400.0, height: 18.0 },
+                view_style,
+            ));
+        }
+
+        y += 200.0;
+    }
+
+    Some(elements)
+}
+
+/// Parse a YouTube watch page (video page)
+fn try_parse_youtube_watch_page(data: &serde_json::Value, url: &str) -> Option<Vec<RenderElement>> {
+    // Extract video ID from URL
+    let video_id = if url.contains("watch?v=") {
+        url.split("watch?v=").nth(1).and_then(|s| s.split('&').next())
+    } else if url.contains("youtu.be/") {
+        url.split("youtu.be/").nth(1).and_then(|s| s.split('?').next())
+    } else {
+        None
+    }?;
+
+    // Find video info
+    let mut title = String::new();
+    let mut channel = String::new();
+    let mut description = String::new();
+    let mut view_count = String::new();
+    let mut like_count = String::new();
+
+    // Search for videoPrimaryInfoRenderer and videoSecondaryInfoRenderer
+    find_video_info(data, &mut title, &mut channel, &mut description, &mut view_count, &mut like_count);
+
+    if title.is_empty() {
+        log::warn!("Could not find video title in watch page");
+        return None;
+    }
+
+    log::info!("YouTube video: {} by {}", title, channel);
+
+    let mut elements = Vec::new();
+    let mut y: f32 = 10.0;
+
+    // Helper to create element
+    fn make_element(kind: ElementKind, text: String, bounds: ElementBounds, style: ElementStyle) -> RenderElement {
+        RenderElement {
+            kind, text, bounds, style,
+            is_link: false, href: None, src: None, alt: None,
+            children: Vec::new(), form_attrs: None, is_inline: false,
+        }
+    }
+
+    // Video player placeholder (thumbnail)
+    let thumbnail_url = format!("https://img.youtube.com/vi/{}/maxresdefault.jpg", video_id);
+    let mut thumb = make_element(
+        ElementKind::Image,
+        String::new(),
+        ElementBounds { x: 20.0, y, width: 854.0, height: 480.0 },
+        ElementStyle::default(),
+    );
+    thumb.src = Some(thumbnail_url);
+    thumb.alt = Some(title.clone());
+    elements.push(thumb);
+    y += 490.0;
+
+    // Play button overlay indicator
+    let mut play_style = ElementStyle::default();
+    play_style.font_size = 16.0;
+    play_style.color = [100, 100, 100, 255];
+    elements.push(make_element(
+        ElementKind::Text,
+        "▶ Video playback requires external player".to_string(),
+        ElementBounds { x: 20.0, y, width: 400.0, height: 24.0 },
+        play_style,
+    ));
+    y += 40.0;
+
+    // Video title
+    let mut title_style = ElementStyle::default();
+    title_style.font_size = 22.0;
+    title_style.font_weight_bold = true;
+    title_style.color = [30, 30, 30, 255];
+    elements.push(make_element(
+        ElementKind::Heading1,
+        title,
+        ElementBounds { x: 20.0, y, width: 854.0, height: 30.0 },
+        title_style,
+    ));
+    y += 40.0;
+
+    // Channel name
+    if !channel.is_empty() {
+        let mut chan_style = ElementStyle::default();
+        chan_style.font_size = 15.0;
+        chan_style.font_weight_bold = true;
+        chan_style.color = [30, 30, 30, 255];
+        elements.push(make_element(
+            ElementKind::Text,
+            channel,
+            ElementBounds { x: 20.0, y, width: 400.0, height: 22.0 },
+            chan_style,
+        ));
+        y += 30.0;
+    }
+
+    // Stats (views and likes)
+    if !view_count.is_empty() || !like_count.is_empty() {
+        let stats = format!("{}{}{}",
+            view_count,
+            if !view_count.is_empty() && !like_count.is_empty() { " • " } else { "" },
+            like_count
+        );
+        let mut stats_style = ElementStyle::default();
+        stats_style.font_size = 13.0;
+        stats_style.color = [96, 96, 96, 255];
+        elements.push(make_element(
+            ElementKind::Text,
+            stats,
+            ElementBounds { x: 20.0, y, width: 400.0, height: 20.0 },
+            stats_style,
+        ));
+        y += 30.0;
+    }
+
+    // Description
+    if !description.is_empty() {
+        y += 10.0;
+        let mut desc_style = ElementStyle::default();
+        desc_style.font_size = 14.0;
+        desc_style.color = [50, 50, 50, 255];
+        desc_style.max_width = 854.0;
+        // Truncate description if too long
+        let desc_text = if description.len() > 500 {
+            format!("{}...", &description[..500])
+        } else {
+            description
+        };
+        elements.push(make_element(
+            ElementKind::Text,
+            desc_text,
+            ElementBounds { x: 20.0, y, width: 854.0, height: 100.0 },
+            desc_style,
+        ));
+    }
+
+    Some(elements)
+}
+
+/// Recursively find video info in ytInitialData
+fn find_video_info(
+    value: &serde_json::Value,
+    title: &mut String,
+    channel: &mut String,
+    description: &mut String,
+    view_count: &mut String,
+    like_count: &mut String,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // videoPrimaryInfoRenderer contains title and view count
+            if let Some(renderer) = map.get("videoPrimaryInfoRenderer") {
+                if let Some(t) = renderer.get("title")
+                    .and_then(|t| t.get("runs"))
+                    .and_then(|r| r.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|r| r.get("text"))
+                    .and_then(|t| t.as_str())
+                {
+                    if title.is_empty() { *title = t.to_string(); }
+                }
+                if let Some(vc) = renderer.get("viewCount")
+                    .and_then(|v| v.get("videoViewCountRenderer"))
+                    .and_then(|r| r.get("viewCount"))
+                    .and_then(|v| v.get("simpleText"))
+                    .and_then(|t| t.as_str())
+                {
+                    if view_count.is_empty() { *view_count = vc.to_string(); }
+                }
+            }
+
+            // videoSecondaryInfoRenderer contains channel and description
+            if let Some(renderer) = map.get("videoSecondaryInfoRenderer") {
+                if let Some(c) = renderer.get("owner")
+                    .and_then(|o| o.get("videoOwnerRenderer"))
+                    .and_then(|r| r.get("title"))
+                    .and_then(|t| t.get("runs"))
+                    .and_then(|r| r.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|r| r.get("text"))
+                    .and_then(|t| t.as_str())
+                {
+                    if channel.is_empty() { *channel = c.to_string(); }
+                }
+                if let Some(d) = renderer.get("attributedDescription")
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_str())
+                {
+                    if description.is_empty() { *description = d.to_string(); }
+                }
+            }
+
+            // Recurse
+            for v in map.values() {
+                find_video_info(v, title, channel, description, view_count, like_count);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                find_video_info(v, title, channel, description, view_count, like_count);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Create a placeholder for YouTube homepage when no videos are available
+fn create_youtube_homepage_placeholder() -> Vec<RenderElement> {
+    let mut elements = Vec::new();
+    let mut y: f32 = 50.0;
+
+    fn make_element(kind: ElementKind, text: String, bounds: ElementBounds, style: ElementStyle) -> RenderElement {
+        RenderElement {
+            kind, text, bounds, style,
+            is_link: false, href: None, src: None, alt: None,
+            children: Vec::new(), form_attrs: None, is_inline: false,
+        }
+    }
+
+    // YouTube logo/header
+    let mut header_style = ElementStyle::default();
+    header_style.font_size = 32.0;
+    header_style.font_weight_bold = true;
+    header_style.color = [255, 0, 0, 255];
+    elements.push(make_element(
+        ElementKind::Heading1,
+        "📺 YouTube".to_string(),
+        ElementBounds { x: 50.0, y, width: 400.0, height: 40.0 },
+        header_style,
+    ));
+    y += 60.0;
+
+    // Explanation
+    let mut text_style = ElementStyle::default();
+    text_style.font_size = 16.0;
+    text_style.color = [60, 60, 60, 255];
+    elements.push(make_element(
+        ElementKind::Text,
+        "YouTube homepage requires login to show personalized videos.".to_string(),
+        ElementBounds { x: 50.0, y, width: 600.0, height: 24.0 },
+        text_style.clone(),
+    ));
+    y += 40.0;
+
+    elements.push(make_element(
+        ElementKind::Text,
+        "Try one of these instead:".to_string(),
+        ElementBounds { x: 50.0, y, width: 400.0, height: 24.0 },
+        text_style.clone(),
+    ));
+    y += 40.0;
+
+    // Suggestions
+    let suggestions = [
+        ("🔍 Search for videos", "https://www.youtube.com/results?search_query="),
+        ("🎵 Music videos", "https://www.youtube.com/results?search_query=music+videos"),
+        ("💻 Programming tutorials", "https://www.youtube.com/results?search_query=programming+tutorial"),
+        ("🎮 Gaming", "https://www.youtube.com/results?search_query=gaming"),
+        ("📰 News", "https://www.youtube.com/results?search_query=news+today"),
+    ];
+
+    for (label, href) in suggestions {
+        let mut link_style = ElementStyle::default();
+        link_style.font_size = 15.0;
+        link_style.color = [30, 100, 200, 255];
+        link_style.text_decoration_underline = true;
+        let mut link = make_element(
+            ElementKind::Link,
+            label.to_string(),
+            ElementBounds { x: 70.0, y, width: 400.0, height: 24.0 },
+            link_style,
+        );
+        link.is_link = true;
+        link.href = Some(href.to_string());
+        elements.push(link);
+        y += 32.0;
+    }
+
+    y += 30.0;
+
+    // Tip
+    let mut tip_style = ElementStyle::default();
+    tip_style.font_size = 13.0;
+    tip_style.color = [100, 100, 100, 255];
+    tip_style.font_style_italic = true;
+    elements.push(make_element(
+        ElementKind::Text,
+        "Tip: Type a YouTube search URL in the address bar, or paste a video link directly.".to_string(),
+        ElementBounds { x: 50.0, y, width: 700.0, height: 20.0 },
+        tip_style,
+    ));
+
+    elements
 }

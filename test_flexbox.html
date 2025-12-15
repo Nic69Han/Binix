@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Flexbox Test</title>
+    <style>
+        .flex-container {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            gap: 10px;
+            background-color: #f0f0f0;
+            padding: 20px;
+            margin: 10px;
+        }
+        
+        .flex-item {
+            background-color: #4a90d9;
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        
+        .flex-column {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            background-color: #e0e0e0;
+            padding: 15px;
+            margin: 10px;
+        }
+        
+        .flex-center {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #d0f0d0;
+            padding: 20px;
+            margin: 10px;
+        }
+        
+        .grid-container {
+            display: grid;
+            gap: 10px;
+            background-color: #f0e0f0;
+            padding: 15px;
+            margin: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Flexbox Layout Test</h1>
+    
+    <h2>Row Layout (space-between)</h2>
+    <div class="flex-container">
+        <div class="flex-item">Item 1</div>
+        <div class="flex-item">Item 2</div>
+        <div class="flex-item">Item 3</div>
+    </div>
+    
+    <h2>Column Layout</h2>
+    <div class="flex-column">
+        <div class="flex-item">Column Item A</div>
+        <div class="flex-item">Column Item B</div>
+        <div class="flex-item">Column Item C</div>
+    </div>
+    
+    <h2>Centered Content</h2>
+    <div class="flex-center">
+        <div class="flex-item">Centered Item</div>
+    </div>
+    
+    <h2>Grid Layout</h2>
+    <div class="grid-container">
+        <div class="flex-item">Grid 1</div>
+        <div class="flex-item">Grid 2</div>
+    </div>
+</body>
+</html>
+

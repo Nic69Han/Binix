@@ -4,6 +4,7 @@ mod app;
 mod events;
 mod images;
 mod tab;
+pub mod taffy_layout;
 mod window;
 
 pub use app::{BrowserApp, run};
@@ -12,7 +13,12 @@ pub use events::{
     Modifiers, MouseButton, MouseEvent, ScrollEvent, TouchEvent, TouchPoint,
 };
 pub use images::{ImageCache, ImageState, LoadedImage, SharedImageCache, create_shared_cache, decode_image};
-pub use tab::{DisplayMode, ElementBounds, ElementKind, ElementStyle, FormAttributes, PageContent, RenderElement, Tab, TabId, TabManager, TextAlign};
+pub use tab::{
+    AlignItems, DisplayMode, ElementBounds, ElementKind, ElementStyle, FlexDirection,
+    FlexProperties, FlexWrap, FormAttributes, JustifyContent, PageContent, Position,
+    RenderElement, Tab, TabId, TabManager, TextAlign,
+};
+pub use taffy_layout::{TaffyLayoutContext, LayoutResult};
 pub use window::Window;
 
 /// UI configuration

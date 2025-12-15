@@ -26,6 +26,8 @@ pub struct BrowserApp {
     form_checks: HashMap<String, bool>,
     /// Pending form submission URL (to navigate after render)
     pending_form_submit: Option<String>,
+    /// Whether to focus the URL bar on next frame
+    focus_url_bar: bool,
 }
 
 impl BrowserApp {
@@ -58,6 +60,7 @@ impl BrowserApp {
             form_values: HashMap::new(),
             form_checks: HashMap::new(),
             pending_form_submit: None,
+            focus_url_bar: true, // Focus URL bar on startup
         }
     }
 
@@ -177,6 +180,12 @@ impl BrowserApp {
                     .desired_width(ui.available_width() - 100.0)
                     .hint_text("Enter URL or search..."),
             );
+
+            // Focus URL bar on startup
+            if self.focus_url_bar {
+                response.request_focus();
+                self.focus_url_bar = false;
+            }
 
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 if let Some(tab) = self.tabs.active_tab_mut() {
@@ -377,13 +386,42 @@ impl BrowserApp {
                 let key = element.form_attrs.as_ref()
                     .map(|f| if !f.id.is_empty() { f.id.clone() } else { f.name.clone() })
                     .unwrap_or_else(|| format!("input_{}", element.bounds.y as u32));
+                let input_name = element.form_attrs.as_ref()
+                    .map(|f| f.name.clone())
+                    .unwrap_or_default();
                 let placeholder = element.form_attrs.as_ref()
                     .map(|f| f.placeholder.clone())
                     .unwrap_or_default();
+                let form_action = element.form_attrs.as_ref()
+                    .and_then(|f| f.form_action.clone());
                 let value = self.form_values.entry(key).or_insert_with(|| {
                     element.form_attrs.as_ref().map(|f| f.value.clone()).unwrap_or_default()
                 });
-                ui.add(egui::TextEdit::singleline(value).hint_text(&placeholder).desired_width(120.0));
+                let response = ui.add(
+                    egui::TextEdit::singleline(value)
+                        .hint_text(&placeholder)
+                        .desired_width(120.0)
+                        .return_key(Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)))
+                );
+
+                // Check if the text edit lost focus due to Enter key press
+                if response.lost_focus() {
+                    let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if enter_pressed {
+                        if let Some(action) = form_action {
+                            let query_value = value.clone();
+                            let encoded_name = url_encode(&input_name);
+                            let encoded_value = url_encode(&query_value);
+                            let submit_url = if action.contains('?') {
+                                format!("{}&{}={}", action, encoded_name, encoded_value)
+                            } else {
+                                format!("{}?{}={}", action, encoded_name, encoded_value)
+                            };
+                            log::info!("Form submit via Enter (inline): {}", submit_url);
+                            self.pending_form_submit = Some(submit_url);
+                        }
+                    }
+                }
             }
             super::ElementKind::Button => {
                 // Get form action if this is a submit button
@@ -469,14 +507,191 @@ impl BrowserApp {
         }
     }
 
+    /// Render a flex container with proper flexbox layout
+    fn render_flex_container(&mut self, ui: &mut egui::Ui, element: &super::RenderElement) {
+        use super::{FlexDirection, JustifyContent, AlignItems};
+
+        let style = &element.style;
+        let flex = &style.flex;
+
+        // Create container frame with background and padding
+        let mut frame = egui::Frame::NONE
+            .inner_margin(egui::Margin {
+                left: style.padding[3] as i8,
+                right: style.padding[1] as i8,
+                top: style.padding[0] as i8,
+                bottom: style.padding[2] as i8,
+            });
+
+        if let Some(bg) = style.background_color {
+            frame = frame.fill(egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]));
+        }
+
+        if let Some(bc) = style.border_color {
+            frame = frame.stroke(egui::Stroke::new(
+                style.border_width[0],
+                egui::Color32::from_rgba_unmultiplied(bc[0], bc[1], bc[2], bc[3]),
+            ));
+        }
+
+        if style.border_radius > 0.0 {
+            frame = frame.rounding(style.border_radius);
+        }
+
+        frame.show(ui, |ui| {
+            // Determine layout direction and spacing
+            let is_row = matches!(flex.direction, FlexDirection::Row | FlexDirection::RowReverse);
+            let gap = flex.gap;
+
+            if is_row {
+                // Horizontal layout
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+
+                    // Apply justify-content
+                    match flex.justify_content {
+                        JustifyContent::Center => {
+                            // Center horizontally: add flexible space on both sides
+                            ui.add_space(ui.available_width() / 3.0);
+                            self.render_flex_children(ui, element, is_row);
+                        }
+                        JustifyContent::FlexEnd => {
+                            // Push to the right
+                            ui.add_space(ui.available_width() * 0.8);
+                            self.render_flex_children(ui, element, is_row);
+                        }
+                        JustifyContent::SpaceBetween | JustifyContent::SpaceAround | JustifyContent::SpaceEvenly => {
+                            // For space-* we render children with calculated spacing
+                            self.render_flex_children_spaced(ui, element, is_row);
+                        }
+                        _ => {
+                            self.render_flex_children(ui, element, is_row);
+                        }
+                    }
+                });
+            } else {
+                // Vertical layout (column)
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = gap;
+
+                    match flex.justify_content {
+                        JustifyContent::Center => {
+                            // Center items horizontally within the column
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                self.render_flex_children(ui, element, is_row);
+                            });
+                        }
+                        _ => {
+                            self.render_flex_children(ui, element, is_row);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /// Render flex children
+    fn render_flex_children(&mut self, ui: &mut egui::Ui, element: &super::RenderElement, _is_row: bool) {
+        for child in &element.children {
+            self.render_flex_child(ui, child);
+        }
+    }
+
+    /// Render flex children with space-between/around/evenly
+    fn render_flex_children_spaced(&mut self, ui: &mut egui::Ui, element: &super::RenderElement, is_row: bool) {
+        use super::JustifyContent;
+
+        let child_count = element.children.len();
+        if child_count == 0 {
+            return;
+        }
+
+        // For space-between, we need to distribute remaining space
+        match element.style.flex.justify_content {
+            JustifyContent::SpaceBetween if child_count > 1 => {
+                // Render first child
+                self.render_flex_child(ui, &element.children[0]);
+
+                // Add flexible space between each child
+                for child in element.children.iter().skip(1) {
+                    if is_row {
+                        ui.add_space(ui.available_width() / (child_count - 1) as f32);
+                    } else {
+                        ui.add_space(8.0);
+                    }
+                    self.render_flex_child(ui, child);
+                }
+            }
+            _ => {
+                // Default: render with gap
+                for child in &element.children {
+                    self.render_flex_child(ui, child);
+                }
+            }
+        }
+    }
+
+    /// Render a single flex child with its background/styling
+    fn render_flex_child(&mut self, ui: &mut egui::Ui, child: &super::RenderElement) {
+        let style = &child.style;
+
+        // Wrap in a frame if the child has background styling
+        if style.background_color.is_some() || style.border_color.is_some() {
+            let mut frame = egui::Frame::NONE
+                .inner_margin(egui::Margin {
+                    left: style.padding[3] as i8,
+                    right: style.padding[1] as i8,
+                    top: style.padding[0] as i8,
+                    bottom: style.padding[2] as i8,
+                });
+
+            if let Some(bg) = style.background_color {
+                frame = frame.fill(egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]));
+            }
+
+            if let Some(bc) = style.border_color {
+                frame = frame.stroke(egui::Stroke::new(
+                    style.border_width[0],
+                    egui::Color32::from_rgba_unmultiplied(bc[0], bc[1], bc[2], bc[3]),
+                ));
+            }
+
+            if style.border_radius > 0.0 {
+                frame = frame.rounding(style.border_radius);
+            }
+
+            frame.show(ui, |ui| {
+                // Render the child content
+                let mut rich_text = egui::RichText::new(&child.text).size(style.font_size);
+                rich_text = rich_text.color(egui::Color32::from_rgba_unmultiplied(
+                    style.color[0], style.color[1], style.color[2], style.color[3],
+                ));
+                if style.font_weight_bold {
+                    rich_text = rich_text.strong();
+                }
+                ui.label(rich_text);
+            });
+        } else {
+            self.render_element(ui, child);
+        }
+    }
+
     /// Render a single element with its CSS styles
     fn render_element(&mut self, ui: &mut egui::Ui, element: &super::RenderElement) {
-        use super::DisplayMode;
+        use super::{DisplayMode, FlexDirection, JustifyContent, AlignItems};
 
         let style = &element.style;
 
         // Skip hidden elements
         if style.display == DisplayMode::None || !style.visible {
+            return;
+        }
+
+        // Handle flex containers with children
+        if (style.display == DisplayMode::Flex || style.display == DisplayMode::Grid)
+            && !element.children.is_empty()
+        {
+            self.render_flex_container(ui, element);
             return;
         }
 
@@ -699,26 +914,47 @@ impl BrowserApp {
                         element.form_attrs.as_ref().map(|f| f.value.clone()).unwrap_or_default()
                     });
 
-                    // Render actual text input
-                    let response = ui.add(
-                        egui::TextEdit::singleline(value)
-                            .hint_text(&placeholder)
-                            .desired_width(200.0)
-                    );
+                    // Calculate input width - use bounds if available, otherwise use available width
+                    let input_width = if element.bounds.width > 50.0 {
+                        element.bounds.width.min(ui.available_width() - 20.0).max(200.0)
+                    } else {
+                        // For search inputs (like Google), use most of available width
+                        (ui.available_width() * 0.7).max(300.0).min(600.0)
+                    };
 
-                    // Check if Enter was pressed to submit the form
-                    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        if let Some(action) = form_action {
-                            // Build form submission URL with query parameters
-                            let query_value = value.clone();
-                            let encoded_name = url_encode(&input_name);
-                            let encoded_value = url_encode(&query_value);
-                            let submit_url = if action.contains('?') {
-                                format!("{}&{}={}", action, encoded_name, encoded_value)
-                            } else {
-                                format!("{}?{}={}", action, encoded_name, encoded_value)
-                            };
-                            self.pending_form_submit = Some(submit_url);
+                    // Render input with styled frame
+                    let response = egui::Frame::NONE
+                        .fill(egui::Color32::WHITE)
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 200)))
+                        .corner_radius(20.0)
+                        .inner_margin(egui::Margin::symmetric(12, 8))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(value)
+                                    .hint_text(&placeholder)
+                                    .desired_width(input_width - 24.0)
+                                    .frame(false)
+                                    .return_key(Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)))
+                            )
+                        }).inner;
+
+                    // Check if the text edit lost focus due to Enter key press
+                    if response.lost_focus() {
+                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if enter_pressed {
+                            if let Some(action) = form_action.clone() {
+                                // Build form submission URL with query parameters
+                                let query_value = value.clone();
+                                let encoded_name = url_encode(&input_name);
+                                let encoded_value = url_encode(&query_value);
+                                let submit_url = if action.contains('?') {
+                                    format!("{}&{}={}", action, encoded_name, encoded_value)
+                                } else {
+                                    format!("{}?{}={}", action, encoded_name, encoded_value)
+                                };
+                                log::info!("Form submit via Enter: {}", submit_url);
+                                self.pending_form_submit = Some(submit_url);
+                            }
                         }
                     }
                 }
@@ -803,6 +1039,10 @@ impl BrowserApp {
                 }
                 ElementKind::Form => {
                     // Forms are containers, handled by children
+                }
+                ElementKind::Container => {
+                    // Containers are handled by render_flex_container
+                    // This shouldn't be reached, but handle gracefully
                 }
             }
         });

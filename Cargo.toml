@@ -34,6 +34,8 @@ base64 = "0.22.1"
 ring = "0.17.14"
 markup5ever_rcdom = "0.36.0"
 image = "0.25.9"
+taffy = "0.9.2"
+serde_json = "1.0.145"
 
 # Core dependencies will be added as we build the browser
 # See docs/browser_technical_specification.md for full list
