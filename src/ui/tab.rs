@@ -1225,19 +1225,26 @@ fn parse_html_to_content(html: &str, base_url: &str) -> PageContent {
         .read_from(&mut html.as_bytes())
         .expect("Failed to parse HTML");
 
-    // Collect all CSS: external stylesheets first, then inline styles
+    // Collect all CSS: external stylesheets (parallel) + inline styles
     let mut all_css = String::new();
 
-    // 1. Extract and fetch external stylesheets
+    // 1. Fetch external stylesheets IN PARALLEL using rayon-style threads
     let external_urls = extract_external_stylesheets(&dom.document, base_url);
-    for url in &external_urls {
-        if let Some(css) = fetch_external_css(url) {
+    if !external_urls.is_empty() {
+        let fetched: Vec<Option<String>> = {
+            let handles: Vec<_> = external_urls.iter().map(|url| {
+                let url = url.clone();
+                std::thread::spawn(move || fetch_external_css(&url))
+            }).collect();
+            handles.into_iter().map(|h| h.join().ok().flatten()).collect()
+        };
+        for css in fetched.into_iter().flatten() {
             all_css.push_str(&css);
             all_css.push('\n');
         }
     }
 
-    // 2. Extract inline <style> elements (these have higher precedence)
+    // 2. Extract inline <style> elements (higher specificity — goes last)
     let inline_css = extract_stylesheets(&dom.document);
     all_css.push_str(&inline_css);
 
@@ -1621,38 +1628,183 @@ fn parse_inline_style(style_attr: &str, style: &mut ElementStyle) {
 fn parse_css_color(value: &str) -> Option<[u8; 4]> {
     let value = value.trim().to_lowercase();
 
-    // Named colors
+    // Transparent / currentColor
+    if value == "transparent" { return Some([0, 0, 0, 0]); }
+    if value == "currentcolor" || value == "inherit" { return None; }
+
+    // CSS Level 3 named colors (extended)
     match value.as_str() {
         "black" => return Some([0, 0, 0, 255]),
         "white" => return Some([255, 255, 255, 255]),
         "red" => return Some([255, 0, 0, 255]),
+        "lime" => return Some([0, 255, 0, 255]),
         "green" => return Some([0, 128, 0, 255]),
         "blue" => return Some([0, 0, 255, 255]),
         "yellow" => return Some([255, 255, 0, 255]),
+        "cyan" | "aqua" => return Some([0, 255, 255, 255]),
+        "magenta" | "fuchsia" => return Some([255, 0, 255, 255]),
         "orange" => return Some([255, 165, 0, 255]),
+        "orangered" => return Some([255, 69, 0, 255]),
+        "tomato" => return Some([255, 99, 71, 255]),
+        "coral" => return Some([255, 127, 80, 255]),
+        "hotpink" => return Some([255, 105, 180, 255]),
+        "pink" => return Some([255, 192, 203, 255]),
+        "deeppink" => return Some([255, 20, 147, 255]),
+        "lightpink" => return Some([255, 182, 193, 255]),
         "purple" => return Some([128, 0, 128, 255]),
+        "violet" => return Some([238, 130, 238, 255]),
+        "indigo" => return Some([75, 0, 130, 255]),
+        "maroon" => return Some([128, 0, 0, 255]),
+        "brown" => return Some([165, 42, 42, 255]),
+        "navy" => return Some([0, 0, 128, 255]),
+        "teal" => return Some([0, 128, 128, 255]),
+        "olive" => return Some([128, 128, 0, 255]),
+        "silver" => return Some([192, 192, 192, 255]),
         "gray" | "grey" => return Some([128, 128, 128, 255]),
-        "transparent" => return Some([0, 0, 0, 0]),
+        "darkgray" | "darkgrey" => return Some([169, 169, 169, 255]),
+        "lightgray" | "lightgrey" => return Some([211, 211, 211, 255]),
+        "dimgray" | "dimgrey" => return Some([105, 105, 105, 255]),
+        "slategray" | "slategrey" => return Some([112, 128, 144, 255]),
+        "gainsboro" => return Some([220, 220, 220, 255]),
+        "whitesmoke" => return Some([245, 245, 245, 255]),
+        "snow" => return Some([255, 250, 250, 255]),
+        "ivory" => return Some([255, 255, 240, 255]),
+        "linen" => return Some([250, 240, 230, 255]),
+        "beige" => return Some([245, 245, 220, 255]),
+        "aliceblue" => return Some([240, 248, 255, 255]),
+        "azure" => return Some([240, 255, 255, 255]),
+        "mintcream" => return Some([245, 255, 250, 255]),
+        "honeydew" => return Some([240, 255, 240, 255]),
+        "lavender" => return Some([230, 230, 250, 255]),
+        "lavenderblush" => return Some([255, 240, 245, 255]),
+        "mistyrose" => return Some([255, 228, 225, 255]),
+        "skyblue" => return Some([135, 206, 235, 255]),
+        "lightskyblue" => return Some([135, 206, 250, 255]),
+        "deepskyblue" => return Some([0, 191, 255, 255]),
+        "dodgerblue" => return Some([30, 144, 255, 255]),
+        "cornflowerblue" => return Some([100, 149, 237, 255]),
+        "royalblue" => return Some([65, 105, 225, 255]),
+        "mediumblue" => return Some([0, 0, 205, 255]),
+        "darkblue" => return Some([0, 0, 139, 255]),
+        "midnightblue" => return Some([25, 25, 112, 255]),
+        "lightgreen" => return Some([144, 238, 144, 255]),
+        "palegreen" => return Some([152, 251, 152, 255]),
+        "springgreen" => return Some([0, 255, 127, 255]),
+        "mediumspringgreen" => return Some([0, 250, 154, 255]),
+        "lawngreen" => return Some([124, 252, 0, 255]),
+        "chartreuse" => return Some([127, 255, 0, 255]),
+        "yellowgreen" => return Some([154, 205, 50, 255]),
+        "olivedrab" => return Some([107, 142, 35, 255]),
+        "darkolivegreen" => return Some([85, 107, 47, 255]),
+        "darkgreen" => return Some([0, 100, 0, 255]),
+        "forestgreen" => return Some([34, 139, 34, 255]),
+        "seagreen" => return Some([46, 139, 87, 255]),
+        "mediumseagreen" => return Some([60, 179, 113, 255]),
+        "gold" => return Some([255, 215, 0, 255]),
+        "goldenrod" => return Some([218, 165, 32, 255]),
+        "darkgoldenrod" => return Some([184, 134, 11, 255]),
+        "khaki" => return Some([240, 230, 140, 255]),
+        "palegoldenrod" => return Some([238, 232, 170, 255]),
+        "moccasin" => return Some([255, 228, 181, 255]),
+        "peachpuff" => return Some([255, 218, 185, 255]),
+        "bisque" => return Some([255, 228, 196, 255]),
+        "navajowhite" => return Some([255, 222, 173, 255]),
+        "wheat" => return Some([245, 222, 179, 255]),
+        "burlywood" => return Some([222, 184, 135, 255]),
+        "tan" => return Some([210, 180, 140, 255]),
+        "sandybrown" => return Some([244, 164, 96, 255]),
+        "peru" => return Some([205, 133, 63, 255]),
+        "chocolate" => return Some([210, 105, 30, 255]),
+        "saddlebrown" => return Some([139, 69, 19, 255]),
+        "sienna" => return Some([160, 82, 45, 255]),
+        "crimson" => return Some([220, 20, 60, 255]),
+        "darkred" => return Some([139, 0, 0, 255]),
+        "firebrick" => return Some([178, 34, 34, 255]),
+        "indianred" => return Some([205, 92, 92, 255]),
+        "lightcoral" => return Some([240, 128, 128, 255]),
+        "salmon" => return Some([250, 128, 114, 255]),
+        "darksalmon" => return Some([233, 150, 122, 255]),
+        "lightsalmon" => return Some([255, 160, 122, 255]),
+        "plum" => return Some([221, 160, 221, 255]),
+        "orchid" => return Some([218, 112, 214, 255]),
+        "mediumorchid" => return Some([186, 85, 211, 255]),
+        "mediumpurple" => return Some([147, 112, 219, 255]),
+        "blueviolet" => return Some([138, 43, 226, 255]),
+        "darkviolet" => return Some([148, 0, 211, 255]),
+        "darkorchid" => return Some([153, 50, 204, 255]),
+        "darkmagenta" => return Some([139, 0, 139, 255]),
+        "rebeccapurple" => return Some([102, 51, 153, 255]),
+        "mediumslateblue" => return Some([123, 104, 238, 255]),
+        "slateblue" => return Some([106, 90, 205, 255]),
+        "darkslateblue" => return Some([72, 61, 139, 255]),
+        "steelblue" => return Some([70, 130, 180, 255]),
+        "lightsteelblue" => return Some([176, 196, 222, 255]),
+        "cadetblue" => return Some([95, 158, 160, 255]),
+        "darkcyan" => return Some([0, 139, 139, 255]),
+        "lightcyan" => return Some([224, 255, 255, 255]),
+        "paleturquoise" => return Some([175, 238, 238, 255]),
+        "aquamarine" => return Some([127, 255, 212, 255]),
+        "turquoise" => return Some([64, 224, 208, 255]),
+        "mediumturquoise" => return Some([72, 209, 204, 255]),
+        "darkturquoise" => return Some([0, 206, 209, 255]),
+        "powderblue" => return Some([176, 224, 230, 255]),
+        "lightblue" => return Some([173, 216, 230, 255]),
+        "thistle" => return Some([216, 191, 216, 255]),
+        "rosybrown" => return Some([188, 143, 143, 255]),
+        "palevioletred" => return Some([219, 112, 147, 255]),
+        "mediumvioletred" => return Some([199, 21, 133, 255]),
+        "antiquewhite" => return Some([250, 235, 215, 255]),
+        "oldlace" => return Some([253, 245, 230, 255]),
+        "floralwhite" => return Some([255, 250, 240, 255]),
+        "seashell" => return Some([255, 245, 238, 255]),
+        "papayawhip" => return Some([255, 239, 213, 255]),
+        "blanchedalmond" => return Some([255, 235, 205, 255]),
+        "cornsilk" => return Some([255, 248, 220, 255]),
+        "lemonchiffon" => return Some([255, 250, 205, 255]),
+        "lightyellow" => return Some([255, 255, 224, 255]),
+        "lightgoldenrodyellow" => return Some([250, 250, 210, 255]),
+        "darkseagreen" => return Some([143, 188, 143, 255]),
+        "mediumaquamarine" => return Some([102, 205, 170, 255]),
+        "darkslategray" | "darkslategrey" => return Some([47, 79, 79, 255]),
+        "lightslategray" | "lightslategrey" => return Some([119, 136, 153, 255]),
         _ => {}
     }
 
-    // Hex colors
+    // Hex colors (#rgb, #rrggbb, #rgba, #rrggbbaa)
     if value.starts_with('#') {
         let hex = &value[1..];
-        if hex.len() == 3 {
-            let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
-            let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
-            let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
-            return Some([r, g, b, 255]);
-        } else if hex.len() == 6 {
-            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-            return Some([r, g, b, 255]);
+        match hex.len() {
+            3 => {
+                let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+                let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+                let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+                return Some([r, g, b, 255]);
+            }
+            4 => {
+                let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+                let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+                let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+                let a = u8::from_str_radix(&hex[3..4].repeat(2), 16).ok()?;
+                return Some([r, g, b, a]);
+            }
+            6 => {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                return Some([r, g, b, 255]);
+            }
+            8 => {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+                return Some([r, g, b, a]);
+            }
+            _ => return None,
         }
     }
 
-    // rgb() and rgba()
+    // rgb(), rgba(), hsl(), hsla()
     if value.starts_with("rgb") {
         let inner = value
             .trim_start_matches("rgba(")
@@ -1660,14 +1812,39 @@ fn parse_css_color(value: &str) -> Option<[u8; 4]> {
             .trim_end_matches(')');
         let parts: Vec<&str> = inner.split(',').collect();
         if parts.len() >= 3 {
-            let r = parts[0].trim().parse::<u8>().ok()?;
-            let g = parts[1].trim().parse::<u8>().ok()?;
-            let b = parts[2].trim().parse::<u8>().ok()?;
-            let a = if parts.len() >= 4 {
-                (parts[3].trim().parse::<f32>().ok()? * 255.0) as u8
-            } else {
-                255
+            let parse_channel = |s: &str| -> Option<u8> {
+                let s = s.trim();
+                if s.ends_with('%') {
+                    s.trim_end_matches('%').trim().parse::<f32>().ok().map(|p| (p * 2.55) as u8)
+                } else {
+                    s.parse::<f32>().ok().map(|v| v.clamp(0.0, 255.0) as u8)
+                }
             };
+            let r = parse_channel(parts[0])?;
+            let g = parse_channel(parts[1])?;
+            let b = parse_channel(parts[2])?;
+            let a = if parts.len() >= 4 {
+                (parts[3].trim().parse::<f32>().ok()?.clamp(0.0, 1.0) * 255.0) as u8
+            } else { 255 };
+            return Some([r, g, b, a]);
+        }
+    }
+
+    // hsl() / hsla() — convert to RGB
+    if value.starts_with("hsl") {
+        let inner = value
+            .trim_start_matches("hsla(")
+            .trim_start_matches("hsl(")
+            .trim_end_matches(')');
+        let parts: Vec<&str> = inner.split(',').collect();
+        if parts.len() >= 3 {
+            let h: f32 = parts[0].trim().parse().ok()?;
+            let s: f32 = parts[1].trim().trim_end_matches('%').trim().parse::<f32>().ok()? / 100.0;
+            let l: f32 = parts[2].trim().trim_end_matches('%').trim().parse::<f32>().ok()? / 100.0;
+            let a: u8 = if parts.len() >= 4 {
+                (parts[3].trim().parse::<f32>().ok()?.clamp(0.0, 1.0) * 255.0) as u8
+            } else { 255 };
+            let [r, g, b] = hsl_to_rgb(h, s, l);
             return Some([r, g, b, a]);
         }
     }
@@ -1675,29 +1852,142 @@ fn parse_css_color(value: &str) -> Option<[u8; 4]> {
     None
 }
 
+/// Convert HSL to RGB (h: 0-360, s: 0-1, l: 0-1)
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [u8; 3] {
+    if s == 0.0 {
+        let v = (l * 255.0) as u8;
+        return [v, v, v];
+    }
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    let r = hue_to_rgb(p, q, h / 360.0 + 1.0 / 3.0);
+    let g = hue_to_rgb(p, q, h / 360.0);
+    let b = hue_to_rgb(p, q, h / 360.0 - 1.0 / 3.0);
+    [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8]
+}
+
+fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
+    if t < 0.0 { t += 1.0; }
+    if t > 1.0 { t -= 1.0; }
+    if t < 1.0 / 6.0 { return p + (q - p) * 6.0 * t; }
+    if t < 1.0 / 2.0 { return q; }
+    if t < 2.0 / 3.0 { return p + (q - p) * (2.0 / 3.0 - t) * 6.0; }
+    p
+}
+
 /// Parse a CSS size value to pixels
 fn parse_css_size(value: &str) -> Option<f32> {
     let value = value.trim().to_lowercase();
 
+    if value == "0" || value == "0px" { return Some(0.0); }
+    if value == "auto" || value == "none" { return None; }
+    if value == "inherit" || value == "initial" || value == "unset" { return None; }
+
     if value.ends_with("px") {
-        return value.trim_end_matches("px").parse().ok();
+        return value.trim_end_matches("px").trim().parse().ok();
     } else if value.ends_with("rem") {
-        // Check rem before em since rem contains em
-        let rem: f32 = value.trim_end_matches("rem").parse().ok()?;
+        let rem: f32 = value.trim_end_matches("rem").trim().parse().ok()?;
         return Some(rem * 16.0);
     } else if value.ends_with("em") {
-        let em: f32 = value.trim_end_matches("em").parse().ok()?;
-        return Some(em * 16.0); // Base font size
+        let em: f32 = value.trim_end_matches("em").trim().parse().ok()?;
+        return Some(em * 16.0);
+    } else if value.ends_with("pt") {
+        let pt: f32 = value.trim_end_matches("pt").trim().parse().ok()?;
+        return Some(pt * 1.333); // 1pt = 1.333px
+    } else if value.ends_with("vh") {
+        let vh: f32 = value.trim_end_matches("vh").trim().parse().ok()?;
+        return Some(vh / 100.0 * 720.0); // Assume 720px viewport height
+    } else if value.ends_with("vw") {
+        let vw: f32 = value.trim_end_matches("vw").trim().parse().ok()?;
+        return Some(vw / 100.0 * 1280.0); // Assume 1280px viewport width
     } else if value.ends_with('%') {
-        let pct: f32 = value.trim_end_matches('%').parse().ok()?;
+        let pct: f32 = value.trim_end_matches('%').trim().parse().ok()?;
         return Some(pct / 100.0 * 16.0);
     }
 
-    // Try parsing as plain number
     value.parse().ok()
 }
 
-/// Form context for passing form action/method to child inputs
+/// Parse a multi-value shorthand (e.g. "10px 20px" or "5px 10px 15px 20px")
+/// Returns [top, right, bottom, left]
+fn parse_shorthand_sizes(value: &str) -> Option<[f32; 4]> {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    match parts.len() {
+        1 => {
+            let v = parse_css_size(parts[0])?;
+            Some([v, v, v, v])
+        }
+        2 => {
+            let tb = parse_css_size(parts[0])?;
+            let lr = parse_css_size(parts[1])?;
+            Some([tb, lr, tb, lr])
+        }
+        3 => {
+            let t = parse_css_size(parts[0])?;
+            let lr = parse_css_size(parts[1])?;
+            let b = parse_css_size(parts[2])?;
+            Some([t, lr, b, lr])
+        }
+        4 => {
+            let t = parse_css_size(parts[0])?;
+            let r = parse_css_size(parts[1])?;
+            let b = parse_css_size(parts[2])?;
+            let l = parse_css_size(parts[3])?;
+            Some([t, r, b, l])
+        }
+        _ => None,
+    }
+}
+
+/// Inherited CSS properties that cascade from parent to child elements
+#[derive(Debug, Clone, Default)]
+struct InheritedStyle {
+    color: Option<[u8; 4]>,
+    font_size: Option<f32>,
+    font_weight_bold: Option<bool>,
+    font_style_italic: Option<bool>,
+    line_height: Option<f32>,
+    text_align: Option<TextAlign>,
+}
+
+impl InheritedStyle {
+    /// Apply inherited values to a child style — child's explicit CSS wins
+    fn apply_to(&self, style: &mut ElementStyle) {
+        let def = ElementStyle::default();
+        if let Some(c) = self.color {
+            if style.color == def.color { style.color = c; }
+        }
+        if let Some(fs) = self.font_size {
+            // Only inherit if element is still at the browser default (16px)
+            if (style.font_size - def.font_size).abs() < 0.01 { style.font_size = fs; }
+        }
+        if let Some(bold) = self.font_weight_bold {
+            if !style.font_weight_bold { style.font_weight_bold = bold; }
+        }
+        if let Some(italic) = self.font_style_italic {
+            if !style.font_style_italic { style.font_style_italic = italic; }
+        }
+        if let Some(lh) = self.line_height {
+            if (style.line_height - def.line_height).abs() < 0.01 { style.line_height = lh; }
+        }
+        if let Some(ta) = self.text_align {
+            if style.text_align == def.text_align { style.text_align = ta; }
+        }
+    }
+
+    /// Derive inherited values from a computed parent style
+    fn from_style(style: &ElementStyle) -> Self {
+        Self {
+            color: Some(style.color),
+            font_size: Some(style.font_size),
+            font_weight_bold: Some(style.font_weight_bold),
+            font_style_italic: Some(style.font_style_italic),
+            line_height: Some(style.line_height),
+            text_align: Some(style.text_align),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct FormContext {
     action: Option<String>,
@@ -2103,7 +2393,7 @@ fn extract_content_with_css(
     base_url: &str,
     css_rules: &[CssRule],
 ) {
-    extract_content_with_css_inner(handle, elements, title, y, indent, base_url, css_rules, &FormContext::default(), 0)
+    extract_content_with_css_inner(handle, elements, title, y, indent, base_url, css_rules, &FormContext::default(), &InheritedStyle::default(), 0)
 }
 
 fn extract_content_with_css_inner(
@@ -2115,6 +2405,7 @@ fn extract_content_with_css_inner(
     base_url: &str,
     css_rules: &[CssRule],
     form_ctx: &FormContext,
+    inherited: &InheritedStyle,
     depth: u32,
 ) {
     // Prevent stack overflow on deeply nested pages
@@ -2172,15 +2463,17 @@ fn extract_content_with_css_inner(
             // Sort by specificity
             matched_props.sort_by_key(|(spec, _)| *spec);
 
-            // Helper to apply CSS rules then inline styles
+            // Helper to apply CSS rules then inline styles, with CSS inheritance
             let apply_styles = |elem: &mut RenderElement| {
-                // Apply matched CSS rules (lower specificity first)
+                // 1. Apply inherited values from parent (lowest priority)
+                inherited.apply_to(&mut elem.style);
+                // 2. Apply matched CSS rules sorted by specificity
                 for (_, props) in &matched_props {
                     for (prop, value) in *props {
                         apply_css_property(&prop, &value, &mut elem.style);
                     }
                 }
-                // Apply inline style (highest priority)
+                // 3. Apply inline style attribute (highest priority)
                 if let Some(ref style_str) = style_attr {
                     parse_inline_style(style_str, &mut elem.style);
                 }
@@ -2218,39 +2511,35 @@ fn extract_content_with_css_inner(
                     // Check if this is a flex/grid container
                     let is_flex_container = matches!(temp_elem.style.display, DisplayMode::Flex | DisplayMode::Grid);
 
-                    if is_flex_container {
-                        // Use the already styled container
-                        let mut container = temp_elem;
+                    // Build new inherited style from computed container style
+                    let child_inherited = InheritedStyle::from_style(&temp_elem.style);
 
-                        // Extract children into the container - each child div becomes a flex item
+                    if is_flex_container {
+                        let mut container = temp_elem;
                         let mut child_elements: Vec<RenderElement> = Vec::new();
                         for child in handle.children.borrow().iter() {
-                            extract_content_with_css_inner(child, &mut child_elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
+                            extract_content_with_css_inner(child, &mut child_elements, title, y, indent, base_url, css_rules, form_ctx, &child_inherited, depth + 1);
                         }
                         container.children = child_elements;
                         elements.push(container);
                     } else {
-                        // Check if this div has only text content (no nested elements)
                         let has_element_children = handle.children.borrow().iter().any(|child| {
                             matches!(&child.data, NodeData::Element { .. })
                         });
-
-                        // Check if this div has any styling (background, border, padding)
                         let has_visual_styling = temp_elem.style.background_color.is_some()
                             || temp_elem.style.border_color.is_some()
                             || temp_elem.style.padding.iter().any(|&p| p > 0.0);
 
                         if !has_element_children && has_visual_styling {
-                            // This is a styled leaf div with text - render it as a styled container
                             let text = extract_text(handle);
                             let mut elem = create_styled_element(ElementKind::Text, text, *y, indent);
                             apply_styles(&mut elem);
                             elements.push(elem);
                             *y += 1.0;
                         } else {
-                            // Regular container - recurse into children
+                            // Propagate computed container style to children
                             for child in handle.children.borrow().iter() {
-                                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
+                                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, &child_inherited, depth + 1);
                             }
                         }
                     }
@@ -2271,7 +2560,7 @@ fn extract_content_with_css_inner(
 
                     if has_special_children {
                         for child in handle.children.borrow().iter() {
-                            extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
+                            extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, depth + 1);
                         }
                     } else {
                         let text = extract_text(handle);
@@ -2320,7 +2609,7 @@ fn extract_content_with_css_inner(
                 }
                 "ul" | "ol" => {
                     for child in handle.children.borrow().iter() {
-                        extract_content_with_css_inner(child, elements, title, y, indent + 1, base_url, css_rules, form_ctx, depth + 1);
+                        extract_content_with_css_inner(child, elements, title, y, indent + 1, base_url, css_rules, form_ctx, inherited, depth + 1);
                     }
                     return;
                 }
@@ -2377,7 +2666,7 @@ fn extract_content_with_css_inner(
                 }
                 "head" => {
                     for child in handle.children.borrow().iter() {
-                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
+                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, depth + 1);
                     }
                     return;
                 }
@@ -2522,7 +2811,7 @@ fn extract_content_with_css_inner(
                     };
 
                     for child in handle.children.borrow().iter() {
-                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, &new_form_ctx, depth + 1);
+                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, &new_form_ctx, inherited, depth + 1);
                     }
                     return;
                 }
@@ -2542,7 +2831,7 @@ fn extract_content_with_css_inner(
 
             // Recurse into children
             for child in handle.children.borrow().iter() {
-                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
+                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, depth + 1);
             }
         }
         NodeData::Text { contents } => {
@@ -2555,7 +2844,7 @@ fn extract_content_with_css_inner(
         }
         NodeData::Document => {
             for child in handle.children.borrow().iter() {
-                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, depth + 1);
+                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, depth + 1);
             }
         }
         _ => {}
@@ -2615,7 +2904,9 @@ fn apply_css_property(property: &str, value: &str, style: &mut ElementStyle) {
             }
         }
         "padding" => {
-            if let Some(size) = parse_css_size(value) {
+            if let Some(sizes) = parse_shorthand_sizes(value) {
+                style.padding = sizes;
+            } else if let Some(size) = parse_css_size(value) {
                 style.padding = [size; 4];
             }
         }
@@ -2640,7 +2931,9 @@ fn apply_css_property(property: &str, value: &str, style: &mut ElementStyle) {
             }
         }
         "margin" => {
-            if let Some(size) = parse_css_size(value) {
+            if let Some(sizes) = parse_shorthand_sizes(value) {
+                style.margin = sizes;
+            } else if let Some(size) = parse_css_size(value) {
                 style.margin = [size; 4];
             }
         }
@@ -2805,6 +3098,51 @@ fn apply_css_property(property: &str, value: &str, style: &mut ElementStyle) {
                 style.z_index = z;
             }
         }
+        // CSS transitions / animations — ignore for static rendering
+        "transition" | "animation" | "transform" | "will-change" => {}
+        // Font shorthand: font: style weight size/line-height family
+        "font" => {
+            // Try to extract font-size from shorthand (e.g. "bold 16px Arial")
+            for part in value.split_whitespace() {
+                if let Some(size) = parse_css_size(part) {
+                    if size > 5.0 { style.font_size = size; break; }
+                }
+            }
+            if value.contains("bold") { style.font_weight_bold = true; }
+            if value.contains("italic") { style.font_style_italic = true; }
+        }
+        // border shorthand: "1px solid #ccc"
+        "border-top" | "border-right" | "border-bottom" | "border-left" => {
+            let idx = match property {
+                "border-top" => 0, "border-right" => 1,
+                "border-bottom" => 2, _ => 3,
+            };
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            for part in &parts {
+                if let Some(w) = parse_css_size(part) { style.border_width[idx] = w; }
+                if let Some(c) = parse_css_color(part) { style.border_color = Some(c); }
+            }
+        }
+        // overflow — ignore (no scroll in static render)
+        "overflow" | "overflow-x" | "overflow-y" => {}
+        // cursor — ignore
+        "cursor" => {}
+        // outline — parse like border
+        "outline" | "outline-color" => {
+            if let Some(color) = parse_css_color(value) {
+                if style.border_color.is_none() { style.border_color = Some(color); }
+            }
+        }
+        // white-space — ignore
+        "white-space" | "word-break" | "overflow-wrap" | "word-wrap" => {}
+        // letter-spacing / word-spacing — ignore (no support in egui)
+        "letter-spacing" | "word-spacing" => {}
+        // list-style — ignore
+        "list-style" | "list-style-type" | "list-style-position" => {}
+        // box-sizing — affects layout model (future)
+        "box-sizing" => {}
+        // Ignore CSS variables (--xxx) gracefully
+        _ if property.starts_with("--") => {}
         _ => {}
     }
 }

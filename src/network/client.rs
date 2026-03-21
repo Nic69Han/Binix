@@ -21,12 +21,14 @@ impl NetworkClient {
     pub fn with_timeout(timeout: Duration) -> Self {
         let client = Client::builder()
             .timeout(timeout)
-            .pool_max_idle_per_host(10)
+            .pool_max_idle_per_host(20)
             .pool_idle_timeout(Duration::from_secs(90))
-            .user_agent("Binix/0.1.0 (Rust Web Browser)")
+            .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Binix/0.1.0 Safari/537.36")
+            .http2_prior_knowledge()   // Prefer HTTP/2 on HTTPS connections
             .gzip(true)
             .brotli(true)
             .deflate(true)
+            .tcp_keepalive(Duration::from_secs(60))
             .build()
             .expect("Failed to create HTTP client");
 
