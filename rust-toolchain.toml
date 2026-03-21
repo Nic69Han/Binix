@@ -1,0 +1,4 @@
+[toolchain]
+channel = "stable"
+# Rust 1.85+ required for edition 2024
+# Install via: rustup update stable

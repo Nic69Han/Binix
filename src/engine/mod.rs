@@ -7,8 +7,10 @@
 //! 4. Paint and composite to screen via GPU
 
 mod page;
+pub mod page_builder;
 
 pub use page::Page;
+pub use page_builder::{PageFetcher, FetchedPage, resolve_url as resolve_page_url};
 
 use crate::compositor::GpuCompositor;
 use crate::js_engine::{DefaultJsEngine, JavaScriptEngine};

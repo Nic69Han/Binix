@@ -35,6 +35,7 @@ pub mod wpt;
 
 // Re-export main types for convenience
 pub use engine::BrowserEngine;
+pub use engine::{PageFetcher, FetchedPage};
 pub use utils::error::{BinixError, Result};
 
 /// Browser version information

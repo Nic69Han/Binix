@@ -5,9 +5,6 @@ use std::sync::{Arc, Mutex};
 use crate::js_engine::JsRuntime;
 use markup5ever_rcdom::Handle;
 
-/// User-Agent string that mimics a real browser for better site compatibility
-const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
 /// Unique tab identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TabId(u64);
@@ -576,60 +573,45 @@ impl Tab {
     }
 }
 
-/// Fetch and parse a web page
+/// Global PageFetcher — shared across all tabs for cache reuse
+fn get_fetcher() -> &'static binix::PageFetcher {
+    use std::sync::OnceLock;
+    static FETCHER: OnceLock<binix::PageFetcher> = OnceLock::new();
+    FETCHER.get_or_init(binix::PageFetcher::new)
+}
+
+/// Fetch a page and parse it into renderable PageContent.
+/// Routes all HTTP through the proper NetworkStack (with cache + redirect handling).
 fn fetch_and_parse(url: &str) -> PageContent {
-    // Handle file:// protocol for local files
+    // file:// is handled locally — NetworkStack is HTTP-only
     if url.starts_with("file://") {
         return fetch_local_file(url);
     }
 
-    // Use blocking reqwest for simplicity in thread
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build();
+    let fetcher = get_fetcher();
 
-    let client = match client {
-        Ok(c) => c,
+    match fetcher.fetch(url) {
+        Ok(page) => {
+            log::info!(
+                "Fetched {} (HTTP {}, {} bytes{})",
+                page.url,
+                page.status,
+                page.body.len(),
+                if page.from_cache { ", cache hit" } else { "" }
+            );
+            parse_html_to_content(&page.body, &page.url)
+        }
         Err(e) => {
-            return PageContent {
+            log::warn!("Fetch error for {}: {}", url, e);
+            PageContent {
                 title: "Error".to_string(),
                 elements: vec![],
-                error: Some(format!("Failed to create client: {}", e)),
+                error: Some(format!("Failed to load page: {}", e)),
                 console_output: Vec::new(),
                 js_errors: Vec::new(),
-            };
+            }
         }
-    };
-
-    let response = match client.get(url).send() {
-        Ok(r) => r,
-        Err(e) => {
-            return PageContent {
-                title: "Error".to_string(),
-                elements: vec![],
-                error: Some(format!("Failed to fetch: {}", e)),
-                console_output: Vec::new(),
-                js_errors: Vec::new(),
-            };
-        }
-    };
-
-    let html = match response.text() {
-        Ok(t) => t,
-        Err(e) => {
-            return PageContent {
-                title: "Error".to_string(),
-                elements: vec![],
-                error: Some(format!("Failed to read response: {}", e)),
-                console_output: Vec::new(),
-                js_errors: Vec::new(),
-            };
-        }
-    };
-
-    // Parse HTML and extract content
-    parse_html_to_content(&html, url)
+    }
 }
 
 /// Fetch a local file
@@ -1209,28 +1191,10 @@ fn extract_external_stylesheets(handle: &Handle, base_url: &str) -> Vec<String> 
 
 /// Fetch external CSS file (blocking)
 fn fetch_external_css(url: &str) -> Option<String> {
-    // Skip non-HTTP URLs for now
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return None;
     }
-
-    // Use blocking reqwest for simplicity
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .user_agent(USER_AGENT)
-        .build()
-        .ok()?;
-
-    match client.get(url).send() {
-        Ok(response) => {
-            if response.status().is_success() {
-                response.text().ok()
-            } else {
-                None
-            }
-        }
-        Err(_) => None,
-    }
+    get_fetcher().fetch_css(url)
 }
 
 /// Parse HTML to renderable content
@@ -1305,46 +1269,14 @@ fn parse_html_to_content(html: &str, base_url: &str) -> PageContent {
 
 /// Extract and execute JavaScript from the page
 fn execute_page_scripts(handle: &Handle, base_url: &str) -> (Vec<String>, Vec<String>) {
-    use std::sync::{Arc, Mutex};
-
-    let console_output = Arc::new(Mutex::new(Vec::new()));
-    let js_errors = Arc::new(Mutex::new(Vec::new()));
-
-    // Extract all script contents
     let scripts = extract_scripts(handle, base_url);
-
     log::info!("Found {} JavaScript scripts to execute", scripts.len());
-
     if scripts.is_empty() {
         return (Vec::new(), Vec::new());
     }
-
-    // Create JavaScript runtime with URL context
     let mut runtime = JsRuntime::with_url(base_url);
-
-    // Execute each script
-    for (i, script) in scripts.iter().enumerate() {
-        log::info!("Executing script {} ({} bytes)", i + 1, script.len());
-        log::debug!("Script content: {}", &script[..script.len().min(200)]);
-
-        match runtime.execute(script) {
-            Ok(result) => {
-                log::info!("Script {} executed successfully, result: {:?}", i + 1, result);
-            }
-            Err(e) => {
-                let error_msg = format!("JS Error in script {}: {}", i + 1, e);
-                log::warn!("{}", error_msg);
-                if let Ok(mut errors) = js_errors.lock() {
-                    errors.push(error_msg);
-                }
-            }
-        }
-    }
-
-    let output = console_output.lock().map(|o| o.clone()).unwrap_or_default();
-    let errors = js_errors.lock().map(|e| e.clone()).unwrap_or_default();
-
-    (output, errors)
+    let output = runtime.execute_scripts(&scripts);
+    (output.logs, output.errors)
 }
 
 /// Extract script contents from the DOM
@@ -1423,104 +1355,20 @@ fn extract_script_text(handle: &Handle) -> String {
 /// Fetch an external JavaScript file
 fn fetch_external_script(url: &str) -> Option<String> {
     log::info!("Fetching external script: {}", url);
-
-    // Skip data URLs and javascript: URLs
     if url.starts_with("data:") || url.starts_with("javascript:") {
         return None;
     }
-
-    // Handle local files
+    // Local files bypass the fetcher
     if url.starts_with("file://") {
         let path = url.trim_start_matches("file://");
-        log::info!("Reading local script file: {}", path);
-        match std::fs::read_to_string(path) {
-            Ok(content) => {
-                log::info!("Successfully read local script ({} bytes)", content.len());
-                return Some(content);
-            }
-            Err(e) => {
-                log::warn!("Failed to read local script {}: {}", path, e);
-                return None;
-            }
-        }
+        return std::fs::read_to_string(path).ok();
     }
-
-    // Use blocking reqwest for HTTP(S) URLs
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .user_agent(USER_AGENT)
-        .build()
-        .ok()?;
-
-    let response = client.get(url).send().ok()?;
-
-    if response.status().is_success() {
-        response.text().ok()
-    } else {
-        log::warn!("Failed to fetch script {}: {}", url, response.status());
-        None
-    }
+    get_fetcher().fetch_script(url)
 }
-
-/// Resolve a relative URL against a base URL
+/// Resolve a relative URL against a base URL (delegates to engine::page_builder)
 fn resolve_url(relative: &str, base_url: &str) -> String {
-    // Already absolute
-    if relative.starts_with("http://") || relative.starts_with("https://") || relative.starts_with("file://") {
-        return relative.to_string();
-    }
-
-    // Data URIs
-    if relative.starts_with("data:") {
-        return relative.to_string();
-    }
-
-    // Protocol-relative URL
-    if relative.starts_with("//") {
-        if base_url.starts_with("https://") {
-            return format!("https:{}", relative);
-        } else {
-            return format!("http:{}", relative);
-        }
-    }
-
-    // Parse base URL
-    let base = if let Some(idx) = base_url.rfind('/') {
-        if base_url[..idx].contains("://") {
-            // Has scheme, check if path or host
-            let after_scheme = &base_url[base_url.find("://").unwrap() + 3..];
-            if after_scheme.contains('/') {
-                &base_url[..idx + 1]
-            } else {
-                &base_url[..]
-            }
-        } else {
-            base_url
-        }
-    } else {
-        base_url
-    };
-
-    // Absolute path from root
-    if relative.starts_with('/') {
-        // Extract origin (scheme + host)
-        if let Some(scheme_end) = base_url.find("://") {
-            let after_scheme = &base_url[scheme_end + 3..];
-            if let Some(path_start) = after_scheme.find('/') {
-                let origin = &base_url[..scheme_end + 3 + path_start];
-                return format!("{}{}", origin, relative);
-            }
-        }
-        return format!("{}{}", base_url.trim_end_matches('/'), relative);
-    }
-
-    // Relative path
-    if base.ends_with('/') {
-        format!("{}{}", base, relative)
-    } else {
-        format!("{}/{}", base, relative)
-    }
+    binix::engine::page_builder::resolve_url(relative, base_url)
 }
-
 /// Create a styled render element based on tag type
 fn create_styled_element(kind: ElementKind, text: String, y: f32, indent: u32) -> RenderElement {
     let mut style = ElementStyle::default();

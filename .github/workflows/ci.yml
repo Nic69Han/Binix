@@ -25,6 +25,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.85"
           components: clippy, rustfmt
 
       - name: Cache cargo
@@ -61,6 +62,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.85"
           components: clippy
 
       - name: Cache cargo
@@ -86,6 +88,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.85"
           components: rustfmt
 
       - name: Check formatting
@@ -105,6 +108,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.85"
           components: llvm-tools-preview
 
       - name: Cache cargo
@@ -143,6 +147,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -173,6 +179,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
 
       - name: Cache cargo
         uses: actions/cache@v4
