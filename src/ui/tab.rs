@@ -851,20 +851,69 @@ impl CssSelector {
         total
     }
 
-    /// Check if selector matches element (simplified - only checks the last part for now)
-    /// Full combinator support requires DOM tree context
+    /// Check if selector matches element, considering ancestor context
     fn matches(&self, tag_name: &str, id: Option<&str>, classes: &[String]) -> bool {
-        // For simple selectors, just check the last part
-        if let Some((combinator, last_part)) = self.parts.last() {
-            if *combinator == Combinator::None || self.parts.len() == 1 {
-                return last_part.matches(tag_name, id, classes);
-            }
-            // For compound selectors, we still match the last part
-            // Full combinator matching requires ancestry info (future enhancement)
-            last_part.matches(tag_name, id, classes)
-        } else {
-            false
+        self.matches_with_ancestors(tag_name, id, classes, &[])
+    }
+
+    /// Full combinator matching with ancestor tag stack
+    /// ancestors: slice of (tag, id, classes) from root to direct parent
+    fn matches_with_ancestors(
+        &self,
+        tag_name: &str,
+        id: Option<&str>,
+        classes: &[String],
+        ancestors: &[(&str, Option<&str>, Vec<String>)],
+    ) -> bool {
+        if self.parts.is_empty() { return false; }
+
+        let n = self.parts.len();
+
+        // Single part — simple match
+        if n == 1 {
+            return self.parts[0].1.matches(tag_name, id, classes);
         }
+
+        // Multi-part: last part must match the element itself
+        let (_, last) = &self.parts[n - 1];
+        if !last.matches(tag_name, id, classes) { return false; }
+
+        // Walk backwards through remaining parts matching against ancestors
+        let mut anc_idx = ancestors.len() as i32 - 1;
+        for i in (0..n - 1).rev() {
+            let (combinator, part) = &self.parts[i];
+            match combinator {
+                Combinator::None | Combinator::Descendant => {
+                    // Find any ancestor that matches (greedy)
+                    let mut found = false;
+                    while anc_idx >= 0 {
+                        let (atag, aid, aclasses) = &ancestors[anc_idx as usize];
+                        anc_idx -= 1;
+                        if part.matches(atag, *aid, aclasses) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found { return false; }
+                }
+                Combinator::Child => {
+                    // Must match the direct parent
+                    if anc_idx < 0 { return false; }
+                    let (atag, aid, aclasses) = &ancestors[anc_idx as usize];
+                    if !part.matches(atag, *aid, aclasses) { return false; }
+                    anc_idx -= 1;
+                }
+                Combinator::AdjacentSibling | Combinator::GeneralSibling => {
+                    // Sibling matching requires sibling context — skip for now
+                    // Just check the ancestor at same level as a heuristic
+                    if anc_idx >= 0 {
+                        let (atag, aid, aclasses) = &ancestors[anc_idx as usize];
+                        if !part.matches(atag, *aid, aclasses) { return false; }
+                    }
+                }
+            }
+        }
+        true
     }
 }
 
@@ -1067,17 +1116,63 @@ fn parse_css_selector(selector: &str) -> CssSelector {
     CssSelector { parts }
 }
 
-/// Parse CSS text into rules
+/// Parse CSS text into rules, with @media query support
 fn parse_css_rules(css: &str) -> Vec<CssRule> {
-    let mut rules = Vec::new();
+    parse_css_rules_with_viewport(css, 1280.0, 720.0)
+}
 
-    // Simple regex-free CSS parser
+/// Parse CSS with a known viewport size for media query evaluation
+fn parse_css_rules_with_viewport(css: &str, vp_width: f32, vp_height: f32) -> Vec<CssRule> {
+    let mut rules = Vec::new();
     let mut chars = css.chars().peekable();
 
     while chars.peek().is_some() {
         // Skip whitespace
         while chars.peek().map_or(false, |c| c.is_whitespace()) {
             chars.next();
+        }
+
+        if chars.peek().is_none() { break; }
+
+        // Peek ahead — if starts with @ handle at-rules
+        if chars.peek() == Some(&'@') {
+            let mut at_rule = String::new();
+            // Read until { or ;
+            for ch in chars.by_ref() {
+                if ch == '{' || ch == ';' {
+                    if ch == '{' {
+                        // Read the inner block
+                        let mut inner = String::new();
+                        let mut depth = 1i32;
+                        for ch2 in chars.by_ref() {
+                            match ch2 {
+                                '{' => { depth += 1; inner.push(ch2); }
+                                '}' => {
+                                    depth -= 1;
+                                    if depth == 0 { break; }
+                                    inner.push(ch2);
+                                }
+                                _ => inner.push(ch2),
+                            }
+                        }
+                        // Evaluate @media condition
+                        let at_lower = at_rule.trim().to_lowercase();
+                        if at_lower.starts_with("@media") {
+                            let condition = at_lower.trim_start_matches("@media").trim();
+                            if media_query_matches(condition, vp_width, vp_height) {
+                                // Parse rules inside the media block
+                                let inner_rules = parse_css_rules_with_viewport(&inner, vp_width, vp_height);
+                                rules.extend(inner_rules);
+                            }
+                        }
+                        // @keyframes, @font-face, etc. — ignore inner block
+                    }
+                    // @ + ; — at-rule without block (e.g. @charset, @import) — skip
+                    break;
+                }
+                at_rule.push(ch);
+            }
+            continue;
         }
 
         // Read selector
@@ -1087,46 +1182,65 @@ fn parse_css_rules(css: &str) -> Vec<CssRule> {
                 chars.next();
                 break;
             }
+            // Skip comments
+            if ch == '/' {
+                chars.next();
+                if chars.peek() == Some(&'*') {
+                    chars.next();
+                    // Read until */
+                    loop {
+                        match chars.next() {
+                            Some('*') if chars.peek() == Some(&'/') => { chars.next(); break; }
+                            None => break,
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+                selector.push('/');
+                continue;
+            }
             selector.push(ch);
             chars.next();
         }
 
-        if selector.trim().is_empty() {
-            break;
-        }
+        let selector = selector.trim().to_string();
+        if selector.is_empty() { break; }
 
-        // Read properties until }
+        // Read properties block
         let mut properties_str = String::new();
         let mut depth = 1;
         while let Some(ch) = chars.next() {
-            if ch == '{' {
-                depth += 1;
-            } else if ch == '}' {
+            if ch == '{' { depth += 1; }
+            else if ch == '}' {
                 depth -= 1;
-                if depth == 0 {
-                    break;
-                }
+                if depth == 0 { break; }
             }
             properties_str.push(ch);
         }
 
-        // Parse properties
+        // Parse declarations
         let mut properties = std::collections::HashMap::new();
         for decl in properties_str.split(';') {
             let decl = decl.trim();
+            if decl.is_empty() { continue; }
+            // Skip CSS comments inside declarations
+            if decl.starts_with("/*") { continue; }
             if let Some(colon_pos) = decl.find(':') {
                 let prop = decl[..colon_pos].trim().to_lowercase();
                 let value = decl[colon_pos + 1..].trim().to_string();
-                if !prop.is_empty() && !value.is_empty() {
+                // Remove !important suffix
+                let value = value.trim_end_matches("!important").trim().to_string();
+                if !prop.is_empty() && !value.is_empty() && !prop.starts_with("/*") {
                     properties.insert(prop, value);
                 }
             }
         }
 
-        // Parse selectors (comma-separated)
+        // Parse comma-separated selectors
         for sel_str in selector.split(',') {
             let sel_str = sel_str.trim();
-            if !sel_str.is_empty() {
+            if !sel_str.is_empty() && !sel_str.starts_with("/*") {
                 rules.push(CssRule {
                     selector: parse_css_selector(sel_str),
                     properties: properties.clone(),
@@ -1136,6 +1250,56 @@ fn parse_css_rules(css: &str) -> Vec<CssRule> {
     }
 
     rules
+}
+
+/// Evaluate a CSS media query condition against viewport dimensions
+fn media_query_matches(condition: &str, vp_width: f32, vp_height: f32) -> bool {
+    let cond = condition.trim().to_lowercase();
+
+    // all, screen, print
+    if cond == "all" || cond == "screen" { return true; }
+    if cond == "print" { return false; }
+
+    // Strip outer parentheses from "(...)"
+    let cond = cond.trim_start_matches('(').trim_end_matches(')');
+
+    // Handle "and" / "or" — split on " and "
+    if cond.contains(" and ") {
+        return cond.split(" and ").all(|part| media_query_matches(part.trim(), vp_width, vp_height));
+    }
+    if cond.contains(" or ") {
+        return cond.split(" or ").any(|part| media_query_matches(part.trim(), vp_width, vp_height));
+    }
+    // Handle "not"
+    if let Some(rest) = cond.strip_prefix("not ") {
+        return !media_query_matches(rest.trim(), vp_width, vp_height);
+    }
+    // Handle "screen and (...)"
+    if let Some(rest) = cond.strip_prefix("screen and ") {
+        return media_query_matches(rest.trim(), vp_width, vp_height);
+    }
+
+    // Parse individual feature: (max-width: 768px) etc.
+    let cond = cond.trim_start_matches('(').trim_end_matches(')');
+    if let Some(colon) = cond.find(':') {
+        let feature = cond[..colon].trim();
+        let value_str = cond[colon + 1..].trim();
+        let value = parse_css_size(value_str).unwrap_or(0.0);
+
+        return match feature {
+            "max-width"        => vp_width <= value,
+            "min-width"        => vp_width >= value,
+            "max-height"       => vp_height <= value,
+            "min-height"       => vp_height >= value,
+            "max-device-width" => vp_width <= value,
+            "min-device-width" => vp_width >= value,
+            "width"            => (vp_width - value).abs() < 1.0,
+            "height"           => (vp_height - value).abs() < 1.0,
+            _ => true, // Unknown features — assume match
+        };
+    }
+
+    true // Default: unknown query, include rules
 }
 
 /// Extract CSS from style elements
@@ -2410,7 +2574,7 @@ fn extract_content_with_css(
     base_url: &str,
     css_rules: &[CssRule],
 ) {
-    extract_content_with_css_inner(handle, elements, title, y, indent, base_url, css_rules, &FormContext::default(), &InheritedStyle::default(), 0)
+    extract_content_with_css_inner(handle, elements, title, y, indent, base_url, css_rules, &FormContext::default(), &InheritedStyle::default(), &[], 0)
 }
 
 fn extract_content_with_css_inner(
@@ -2423,6 +2587,7 @@ fn extract_content_with_css_inner(
     css_rules: &[CssRule],
     form_ctx: &FormContext,
     inherited: &InheritedStyle,
+    ancestors: &[(&str, Option<&str>, Vec<String>)],
     depth: u32,
 ) {
     // Prevent stack overflow on deeply nested pages
@@ -2470,15 +2635,19 @@ fn extract_content_with_css_inner(
                 .find(|a| a.name.local.as_ref() == "style")
                 .map(|a| a.value.to_string());
 
-            // Find matching CSS rules and collect properties
+            // Find matching CSS rules using full combinator matching with ancestor context
             let mut matched_props: Vec<((u32, u32, u32), &std::collections::HashMap<String, String>)> = Vec::new();
             for rule in css_rules {
-                if rule.selector.matches(tag, id.as_deref(), &classes) {
+                if rule.selector.matches_with_ancestors(tag, id.as_deref(), &classes, ancestors) {
                     matched_props.push((rule.selector.specificity(), &rule.properties));
                 }
             }
-            // Sort by specificity
+            // Sort by specificity (id > class > tag)
             matched_props.sort_by_key(|(spec, _)| *spec);
+
+            // Build extended ancestor list for children of this element
+            let my_classes: Vec<String> = classes.clone();
+            let my_id: Option<String> = id.clone();
 
             // Helper to apply CSS rules then inline styles, with CSS inheritance
             let apply_styles = |elem: &mut RenderElement| {
@@ -2530,12 +2699,16 @@ fn extract_content_with_css_inner(
 
                     // Build new inherited style from computed container style
                     let child_inherited = InheritedStyle::from_style(&temp_elem.style);
+                    // Extend ancestor stack with this element for CSS combinator matching
+                    let mut child_ancestors: Vec<(&str, Option<&str>, Vec<String>)> = ancestors.to_vec();
+                    child_ancestors.push((tag, my_id.as_deref(), my_classes.clone()));
+                    let child_ancestors_ref: &[(&str, Option<&str>, Vec<String>)] = &child_ancestors;
 
                     if is_flex_container {
                         let mut container = temp_elem;
                         let mut child_elements: Vec<RenderElement> = Vec::new();
                         for child in handle.children.borrow().iter() {
-                            extract_content_with_css_inner(child, &mut child_elements, title, y, indent, base_url, css_rules, form_ctx, &child_inherited, depth + 1);
+                            extract_content_with_css_inner(child, &mut child_elements, title, y, indent, base_url, css_rules, form_ctx, &child_inherited, child_ancestors_ref, depth + 1);
                         }
                         container.children = child_elements;
                         elements.push(container);
@@ -2554,9 +2727,9 @@ fn extract_content_with_css_inner(
                             elements.push(elem);
                             *y += 1.0;
                         } else {
-                            // Propagate computed container style to children
+                            // Propagate computed container style + ancestor context to children
                             for child in handle.children.borrow().iter() {
-                                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, &child_inherited, depth + 1);
+                                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, &child_inherited, child_ancestors_ref, depth + 1);
                             }
                         }
                     }
@@ -2577,7 +2750,7 @@ fn extract_content_with_css_inner(
 
                     if has_special_children {
                         for child in handle.children.borrow().iter() {
-                            extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, depth + 1);
+                            extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, ancestors, depth + 1);
                         }
                     } else {
                         let text = extract_text(handle);
@@ -2626,7 +2799,7 @@ fn extract_content_with_css_inner(
                 }
                 "ul" | "ol" => {
                     for child in handle.children.borrow().iter() {
-                        extract_content_with_css_inner(child, elements, title, y, indent + 1, base_url, css_rules, form_ctx, inherited, depth + 1);
+                        extract_content_with_css_inner(child, elements, title, y, indent + 1, base_url, css_rules, form_ctx, inherited, ancestors, depth + 1);
                     }
                     return;
                 }
@@ -2683,7 +2856,7 @@ fn extract_content_with_css_inner(
                 }
                 "head" => {
                     for child in handle.children.borrow().iter() {
-                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, depth + 1);
+                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, ancestors, depth + 1);
                     }
                     return;
                 }
@@ -2828,7 +3001,7 @@ fn extract_content_with_css_inner(
                     };
 
                     for child in handle.children.borrow().iter() {
-                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, &new_form_ctx, inherited, depth + 1);
+                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, &new_form_ctx, inherited, ancestors, depth + 1);
                     }
                     return;
                 }
@@ -2848,7 +3021,7 @@ fn extract_content_with_css_inner(
 
             // Recurse into children
             for child in handle.children.borrow().iter() {
-                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, depth + 1);
+                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, ancestors, depth + 1);
             }
         }
         NodeData::Text { contents } => {
@@ -2861,7 +3034,7 @@ fn extract_content_with_css_inner(
         }
         NodeData::Document => {
             for child in handle.children.borrow().iter() {
-                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, depth + 1);
+                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, ancestors, depth + 1);
             }
         }
         _ => {}
