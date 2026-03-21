@@ -1371,10 +1371,14 @@ fn extract_external_stylesheets(handle: &Handle, base_url: &str) -> Vec<String> 
 
 /// Fetch external CSS file (blocking)
 fn fetch_external_css(url: &str) -> Option<String> {
+    fetch_external_css_for_page(url, "")
+}
+
+fn fetch_external_css_for_page(url: &str, page_url: &str) -> Option<String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return None;
     }
-    get_fetcher().fetch_css(url)
+    get_fetcher().fetch_css_for_page(url, page_url)
 }
 
 /// Parse HTML to renderable content
@@ -1500,15 +1504,23 @@ fn extract_scripts_recursive(handle: &Handle, scripts: &mut Vec<String>, base_ur
                     .unwrap_or_else(|| "text/javascript".to_string());
 
                 // Only process JavaScript (not modules or other types for now)
-                if script_type.contains("javascript") || script_type.is_empty() || script_type == "text/javascript" {
+                let is_js = script_type.is_empty()
+                    || script_type == "text/javascript"
+                    || script_type.contains("javascript");
+                if is_js {
+                    // Extract integrity attribute for SRI verification
+                    let integrity = attrs_ref
+                        .iter()
+                        .find(|a| a.name.local.as_ref() == "integrity")
+                        .map(|a| a.value.to_string())
+                        .unwrap_or_default();
+
                     if let Some(src_url) = src {
-                        // External script - fetch it
                         let full_url = resolve_url(&src_url, base_url);
-                        if let Some(script_content) = fetch_external_script(&full_url) {
+                        if let Some(script_content) = fetch_external_script_for_page(&full_url, base_url, &integrity) {
                             scripts.push(script_content);
                         }
                     } else {
-                        // Inline script - extract text content
                         let script_text = extract_script_text(handle);
                         if !script_text.trim().is_empty() {
                             scripts.push(script_text);
@@ -1542,16 +1554,30 @@ fn extract_script_text(handle: &Handle) -> String {
 
 /// Fetch an external JavaScript file
 fn fetch_external_script(url: &str) -> Option<String> {
+    fetch_external_script_for_page(url, "", "")
+}
+
+fn fetch_external_script_for_page(url: &str, page_url: &str, integrity: &str) -> Option<String> {
     log::info!("Fetching external script: {}", url);
     if url.starts_with("data:") || url.starts_with("javascript:") {
         return None;
     }
-    // Local files bypass the fetcher
     if url.starts_with("file://") {
         let path = url.trim_start_matches("file://");
         return std::fs::read_to_string(path).ok();
     }
-    get_fetcher().fetch_script(url)
+    let content = get_fetcher().fetch_script_for_page(url, page_url)?;
+    // Verify SRI integrity if specified
+    if !integrity.is_empty() {
+        use crate::security::sri::SubresourceIntegrity;
+        let sri = SubresourceIntegrity::parse(integrity);
+        if !sri.verify(content.as_bytes()) {
+            log::warn!("SRI check failed for script: {}", url);
+            return None;
+        }
+        log::info!("SRI verified: {}", url);
+    }
+    Some(content)
 }
 /// Resolve a relative URL against a base URL (delegates to engine::page_builder)
 fn resolve_url(relative: &str, base_url: &str) -> String {

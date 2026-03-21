@@ -88,11 +88,29 @@ impl PageFetcher {
 
     /// Fetch an external CSS asset. Returns `None` on failure.
     pub fn fetch_css(&self, url: &str) -> Option<String> {
+        self.fetch_css_for_page(url, "")
+    }
+
+    /// Fetch an external CSS asset with mixed-content check against page URL.
+    pub fn fetch_css_for_page(&self, url: &str, page_url: &str) -> Option<String> {
+        if !page_url.is_empty() && is_mixed_content(page_url, url) {
+            log::warn!("Mixed content blocked: CSS {} on page {}", url, page_url);
+            return None;
+        }
         self.fetch_asset(url, DEFAULT_ASSET_TTL)
     }
 
     /// Fetch an external JavaScript asset. Returns `None` on failure.
     pub fn fetch_script(&self, url: &str) -> Option<String> {
+        self.fetch_script_for_page(url, "")
+    }
+
+    /// Fetch an external JavaScript asset with mixed-content check.
+    pub fn fetch_script_for_page(&self, url: &str, page_url: &str) -> Option<String> {
+        if !page_url.is_empty() && is_mixed_content(page_url, url) {
+            log::warn!("Mixed content blocked: script {} on page {}", url, page_url);
+            return None;
+        }
         self.fetch_asset(url, DEFAULT_ASSET_TTL)
     }
 
@@ -103,6 +121,12 @@ impl PageFetcher {
             if let Some(entry) = cache.get(url) {
                 return Some(String::from_utf8_lossy(&entry.body).into_owned());
             }
+        }
+
+        // Validate URL scheme (no javascript: or data: resources via network)
+        if url.starts_with("javascript:") || url.starts_with("data:") {
+            log::warn!("Blocked fetch of scheme: {}", url);
+            return None;
         }
 
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -278,6 +302,16 @@ pub fn resolve_url(url: &str, base: &str) -> String {
     format!("{}{}", base_dir, url)
 }
 
+/// Check if loading `resource_url` from an `https://` page would be mixed content
+pub fn is_mixed_content(page_url: &str, resource_url: &str) -> bool {
+    // Only HTTPS pages enforce mixed content blocking
+    if !page_url.starts_with("https://") {
+        return false;
+    }
+    // HTTP resources on HTTPS pages = mixed content
+    resource_url.starts_with("http://")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +346,50 @@ mod tests {
             resolve_url("//cdn.example.com/lib.js", "https://example.com/"),
             "https://cdn.example.com/lib.js"
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CSP + SRI enforcement helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::security::csp::{ContentSecurityPolicy, CspDirective};
+use crate::security::sri::SubresourceIntegrity;
+
+/// Enforce CSP on a fetched asset URL, given the policy parsed from the page headers.
+/// Returns `Ok(())` if the resource is allowed, `Err(reason)` if blocked.
+pub fn csp_check_asset(
+    csp: &mut ContentSecurityPolicy,
+    directive: CspDirective,
+    url: &str,
+    document_url: &str,
+) -> Result<(), String> {
+    if csp.check_and_report(directive, url, document_url) {
+        Ok(())
+    } else {
+        Err(format!("CSP blocked {} for directive {:?}", url, directive))
+    }
+}
+
+/// Parse CSP header from response headers. Returns None if no CSP header present.
+pub fn parse_csp_from_headers(headers: &std::collections::HashMap<String, String>) -> Option<ContentSecurityPolicy> {
+    headers
+        .get("content-security-policy")
+        .or_else(|| headers.get("Content-Security-Policy"))
+        .map(|v| ContentSecurityPolicy::parse(v))
+}
+
+/// Verify a fetched asset's body against its SRI integrity attribute.
+/// Returns `Ok(())` if integrity passes or no integrity specified.
+/// Returns `Err(reason)` if integrity check fails.
+pub fn sri_verify(integrity_attr: &str, content: &[u8]) -> Result<(), String> {
+    if integrity_attr.is_empty() {
+        return Ok(());
+    }
+    let sri = SubresourceIntegrity::parse(integrity_attr);
+    if sri.verify(content) {
+        Ok(())
+    } else {
+        Err(format!("SRI integrity check failed for attribute: {}", integrity_attr))
     }
 }

@@ -9,7 +9,7 @@
 mod cookies;
 mod cors;
 pub mod csp;
-mod sri;
+pub mod sri;
 
 pub use cookies::{Cookie, CookieJar, SameSite};
 pub use cors::{CorsPolicy, CorsRequest, CorsResult, PreflightResponse};
