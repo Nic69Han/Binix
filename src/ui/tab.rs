@@ -2863,7 +2863,7 @@ fn extract_content_with_css_inner(
                     *y += 1.0;
                     return;
                 }
-                "script" | "style" | "noscript" | "meta" | "link" | "template" => {
+                "script" | "style" | "noscript" | "template" => {
                     return;
                 }
                 "svg" => {
@@ -2881,8 +2881,13 @@ fn extract_content_with_css_inner(
                     return;
                 }
                 "head" => {
+                    // Only extract the title from head — CSS already processed separately
                     for child in handle.children.borrow().iter() {
-                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, ancestors, depth + 1);
+                        if let markup5ever_rcdom::NodeData::Element { name, .. } = &child.data {
+                            if name.local.as_ref() == "title" {
+                                extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, ancestors, depth + 1);
+                            }
+                        }
                     }
                     return;
                 }
@@ -3042,6 +3047,60 @@ fn extract_content_with_css_inner(
                     }
                     return;
                 }
+                // ── Tables ───────────────────────────────────────────────
+                "table" | "thead" | "tbody" | "tfoot" => {
+                    // Render table as an egui grid by collecting rows
+                    let table_rows = collect_table_rows(handle);
+                    if !table_rows.is_empty() {
+                        render_table_as_elements(&table_rows, elements, y, indent, tag == "thead");
+                    } else {
+                        // Fallback: recurse normally
+                        let child_inh = InheritedStyle::from_style(&{
+                            let mut tmp = create_styled_element(ElementKind::Container, String::new(), *y, indent);
+                            apply_styles(&mut tmp);
+                            tmp.style
+                        });
+                        for child in handle.children.borrow().iter() {
+                            extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, &child_inh, ancestors, depth + 1);
+                        }
+                    }
+                    return;
+                }
+                "tr" => {
+                    // Orphan <tr> outside <table> — render cells as inline row
+                    for child in handle.children.borrow().iter() {
+                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, ancestors, depth + 1);
+                    }
+                    *y += 1.0;
+                    return;
+                }
+                "td" | "th" => {
+                    // Orphan cell — render as text
+                    let text = extract_text(handle);
+                    if !text.is_empty() {
+                        let mut elem = create_styled_element(ElementKind::TableCell, text, *y, indent);
+                        if tag == "th" { elem.style.font_weight_bold = true; }
+                        elem.is_inline = true;
+                        apply_styles(&mut elem);
+                        elements.push(elem);
+                    }
+                    return;
+                }
+                // ── Skip non-visual / metadata tags ──────────────────────────
+                "script" | "style" | "noscript" | "template" | "slot" => {
+                    return; // Already handled or non-visual
+                }
+                "meta" | "link" | "base" => {
+                    return;
+                }
+                // ── Semantic wrappers — just recurse ─────────────────────────
+                "main" | "aside" | "figure" | "figcaption" | "details" |
+                "summary" | "dialog" | "address" | "map" | "picture" => {
+                    for child in handle.children.borrow().iter() {
+                        extract_content_with_css_inner(child, elements, title, y, indent, base_url, css_rules, form_ctx, inherited, ancestors, depth + 1);
+                    }
+                    return;
+                }
                 _ => {}
             }
 
@@ -3068,6 +3127,95 @@ fn extract_content_with_css_inner(
 }
 
 /// Apply a single CSS property to ElementStyle
+/// Collect rows from a <table>, <thead>, <tbody> handle.
+/// Returns Vec of rows, each row is a Vec of (text, is_header) cell tuples.
+fn collect_table_rows(handle: &Handle) -> Vec<Vec<(String, bool)>> {
+    use markup5ever_rcdom::NodeData;
+    let mut rows: Vec<Vec<(String, bool)>> = Vec::new();
+    collect_rows_recursive(handle, &mut rows);
+    rows
+}
+
+fn collect_rows_recursive(handle: &Handle, rows: &mut Vec<Vec<(String, bool)>>) {
+    use markup5ever_rcdom::NodeData;
+    match &handle.data {
+        NodeData::Element { name, .. } => {
+            let tag = name.local.as_ref();
+            match tag {
+                "tr" => {
+                    let mut row: Vec<(String, bool)> = Vec::new();
+                    for child in handle.children.borrow().iter() {
+                        if let NodeData::Element { name, .. } = &child.data {
+                            let ctag = name.local.as_ref();
+                            if ctag == "td" || ctag == "th" {
+                                row.push((extract_text(child), ctag == "th"));
+                            }
+                        }
+                    }
+                    if !row.is_empty() {
+                        rows.push(row);
+                    }
+                }
+                _ => {
+                    for child in handle.children.borrow().iter() {
+                        collect_rows_recursive(child, rows);
+                    }
+                }
+            }
+        }
+        _ => {
+            for child in handle.children.borrow().iter() {
+                collect_rows_recursive(child, rows);
+            }
+        }
+    }
+}
+
+/// Render collected table rows as RenderElements.
+/// Each row becomes a set of inline TableCell elements separated by spacers.
+fn render_table_as_elements(
+    rows: &[Vec<(String, bool)>],
+    elements: &mut Vec<RenderElement>,
+    y: &mut f32,
+    indent: u32,
+    force_header: bool,
+) {
+    if rows.is_empty() { return; }
+
+    // Add thin top border
+    let sep = create_styled_element(ElementKind::HorizontalRule, "─".repeat(40), *y, indent);
+    elements.push(sep);
+    *y += 0.3;
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        let is_header = force_header || row_idx == 0 && row.iter().any(|(_, h)| *h);
+
+        for (cell_text, is_th) in row {
+            let text = if cell_text.len() > 40 {
+                format!("{}…", &cell_text[..37])
+            } else {
+                cell_text.clone()
+            };
+            let mut elem = create_styled_element(ElementKind::TableCell, text, *y, indent);
+            elem.style.font_weight_bold = is_header || *is_th;
+            elem.style.padding = [4.0, 12.0, 4.0, 4.0];
+            if is_header || *is_th {
+                elem.style.background_color = Some([240, 240, 245, 255]);
+                elem.style.border_width = [0.0, 0.0, 1.0, 0.0];
+                elem.style.border_color = Some([200, 200, 210, 255]);
+            }
+            elem.is_inline = true;
+            elements.push(elem);
+        }
+        *y += 1.0;
+    }
+
+    // Bottom border
+    let sep = create_styled_element(ElementKind::HorizontalRule, "─".repeat(40), *y, indent);
+    elements.push(sep);
+    *y += 0.5;
+}
+
 fn apply_css_property(property: &str, value: &str, style: &mut ElementStyle) {
     match property {
         "color" => {
