@@ -28,6 +28,8 @@ pub struct PageContent {
     pub console_output: Vec<String>,
     /// JavaScript errors
     pub js_errors: Vec<String>,
+    /// Total page load time in milliseconds
+    pub load_time_ms: Option<u64>,
 }
 
 impl Default for PageContent {
@@ -38,6 +40,7 @@ impl Default for PageContent {
             error: None,
             console_output: Vec::new(),
             js_errors: Vec::new(),
+            load_time_ms: None,
         }
     }
 }
@@ -558,6 +561,11 @@ impl Tab {
         if let Some(ref rx) = self.content_receiver {
             if let Ok(new_content) = rx.try_recv() {
                 self.title = new_content.title.clone();
+                // Log load timing
+                if let Some(ms) = new_content.load_time_ms {
+                    log::info!("Page loaded: {} elements in {}ms — {}", 
+                        new_content.elements.len(), ms, self.url);
+                }
                 if let Ok(mut content) = self.content.lock() {
                     *content = new_content;
                 }
@@ -574,18 +582,22 @@ impl Tab {
 }
 
 /// Global PageFetcher — shared across all tabs for cache reuse
-fn get_fetcher() -> &'static binix::PageFetcher {
+fn get_fetcher() -> &'static crate::PageFetcher {
     use std::sync::OnceLock;
-    static FETCHER: OnceLock<binix::PageFetcher> = OnceLock::new();
-    FETCHER.get_or_init(binix::PageFetcher::new)
+    static FETCHER: OnceLock<crate::PageFetcher> = OnceLock::new();
+    FETCHER.get_or_init(crate::PageFetcher::new)
 }
 
 /// Fetch a page and parse it into renderable PageContent.
 /// Routes all HTTP through the proper NetworkStack (with cache + redirect handling).
 fn fetch_and_parse(url: &str) -> PageContent {
+    let t_start = std::time::Instant::now();
+
     // file:// is handled locally — NetworkStack is HTTP-only
     if url.starts_with("file://") {
-        return fetch_local_file(url);
+        let mut result = fetch_local_file(url);
+        result.load_time_ms = Some(t_start.elapsed().as_millis() as u64);
+        return result;
     }
 
     let fetcher = get_fetcher();
@@ -599,7 +611,9 @@ fn fetch_and_parse(url: &str) -> PageContent {
                 page.body.len(),
                 if page.from_cache { ", cache hit" } else { "" }
             );
-            parse_html_to_content(&page.body, &page.url)
+            let mut result = parse_html_to_content(&page.body, &page.url);
+            result.load_time_ms = Some(t_start.elapsed().as_millis() as u64);
+            result
         }
         Err(e) => {
             log::warn!("Fetch error for {}: {}", url, e);
@@ -609,6 +623,7 @@ fn fetch_and_parse(url: &str) -> PageContent {
                 error: Some(format!("Failed to load page: {}", e)),
                 console_output: Vec::new(),
                 js_errors: Vec::new(),
+                load_time_ms: Some(t_start.elapsed().as_millis() as u64),
             }
         }
     }
@@ -629,6 +644,7 @@ fn fetch_local_file(url: &str) -> PageContent {
             error: Some(format!("Failed to read file: {}", e)),
             console_output: Vec::new(),
             js_errors: Vec::new(),
+            load_time_ms: None,
         },
     }
 }
@@ -1216,6 +1232,7 @@ fn parse_html_to_content(html: &str, base_url: &str) -> PageContent {
             error: None,
             console_output: Vec::new(),
             js_errors: Vec::new(),
+            load_time_ms: None,
         };
     }
 
@@ -1374,7 +1391,7 @@ fn fetch_external_script(url: &str) -> Option<String> {
 }
 /// Resolve a relative URL against a base URL (delegates to engine::page_builder)
 fn resolve_url(relative: &str, base_url: &str) -> String {
-    binix::engine::page_builder::resolve_url(relative, base_url)
+    crate::engine::page_builder::resolve_url(relative, base_url)
 }
 /// Create a styled render element based on tag type
 fn create_styled_element(kind: ElementKind, text: String, y: f32, indent: u32) -> RenderElement {

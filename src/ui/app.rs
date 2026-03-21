@@ -1,8 +1,10 @@
 //! Main browser application using eframe/egui
 
 use super::{ElementKind, SharedImageCache, TabManager, Theme, UiConfig, create_shared_cache};
+use crate::devtools::{DevTools, LogLevel, RequestStatus};
 use eframe::egui;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// Main browser application
 pub struct BrowserApp {
@@ -28,6 +30,14 @@ pub struct BrowserApp {
     pending_form_submit: Option<String>,
     /// Whether to focus the URL bar on next frame
     focus_url_bar: bool,
+    /// Developer tools state
+    devtools: Arc<Mutex<DevTools>>,
+    /// Active devtools tab: 0=Console, 1=Elements, 2=Network, 3=Performance
+    devtools_tab: usize,
+    /// Console filter text
+    console_filter: String,
+    /// Console log level filter
+    console_level_filter: Option<LogLevel>,
 }
 
 impl BrowserApp {
@@ -61,6 +71,10 @@ impl BrowserApp {
             form_checks: HashMap::new(),
             pending_form_submit: None,
             focus_url_bar: true, // Focus URL bar on startup
+            devtools: Arc::new(Mutex::new(DevTools::new())),
+            devtools_tab: 0,
+            console_filter: String::new(),
+            console_level_filter: None,
         }
     }
 
@@ -1056,24 +1070,66 @@ impl BrowserApp {
     /// Render new tab page
     fn render_new_tab_page(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
-            ui.add_space(100.0);
-            ui.heading("🌐 Binix Browser");
-            ui.add_space(20.0);
-            ui.label("Ultra-high-performance browser written in Rust");
-            ui.add_space(40.0);
+            ui.add_space(80.0);
+            ui.label(egui::RichText::new("🌐").size(48.0));
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Binix").size(32.0).strong());
+            ui.label(egui::RichText::new("Ultra-high-performance browser · Rust")
+                .size(13.0)
+                .color(egui::Color32::GRAY));
+            ui.add_space(32.0);
 
-            // Quick links
-            ui.horizontal(|ui| {
-                if ui.button("📰 News").clicked() {
-                    self.url_input = "https://news.ycombinator.com".to_string();
-                }
-                if ui.button("🔍 Search").clicked() {
-                    self.url_input = "https://duckduckgo.com".to_string();
-                }
-                if ui.button("📧 Mail").clicked() {
-                    self.url_input = "https://mail.google.com".to_string();
+            // Quick navigation buttons
+            ui.horizontal_wrapped(|ui| {
+                let quick_links = [
+                    ("📰", "Hacker News",  "https://news.ycombinator.com"),
+                    ("🔍", "DuckDuckGo",   "https://duckduckgo.com"),
+                    ("🦀", "crates.io",    "https://crates.io"),
+                    ("📖", "MDN Docs",     "https://developer.mozilla.org"),
+                    ("🐙", "GitHub",       "https://github.com"),
+                    ("🌍", "Wikipedia",   "https://wikipedia.org"),
+                ];
+                for (icon, label, url) in quick_links {
+                    let btn = egui::Button::new(
+                        egui::RichText::new(format!("{icon} {label}")).size(13.0)
+                    ).min_size(egui::vec2(120.0, 36.0));
+                    if ui.add(btn).clicked() {
+                        self.url_input = url.to_string();
+                        if let Some(tab) = self.tabs.active_tab_mut() {
+                            tab.navigate(url);
+                        }
+                    }
                 }
             });
+
+            ui.add_space(40.0);
+            ui.separator();
+            ui.add_space(12.0);
+
+            // Keyboard shortcuts reference
+            ui.label(egui::RichText::new("Keyboard Shortcuts").strong().size(12.0).color(egui::Color32::GRAY));
+            ui.add_space(6.0);
+            egui::Grid::new("shortcuts")
+                .num_columns(2)
+                .spacing([24.0, 4.0])
+                .show(ui, |ui| {
+                    let shortcuts = [
+                        ("Ctrl+T",  "New tab"),
+                        ("Ctrl+W",  "Close tab"),
+                        ("Ctrl+R",  "Reload"),
+                        ("Ctrl+L",  "Focus address bar"),
+                        ("Alt+←",   "Back"),
+                        ("Alt+→",   "Forward"),
+                        ("F12",     "Developer tools"),
+                        ("Ctrl++/-","Zoom in/out"),
+                    ];
+                    for (key, desc) in shortcuts {
+                        ui.label(egui::RichText::new(key).monospace().size(11.0)
+                            .color(egui::Color32::from_rgb(180, 180, 220)));
+                        ui.label(egui::RichText::new(desc).size(11.0).color(egui::Color32::GRAY));
+                        ui.end_row();
+                    }
+                });
         });
     }
 
@@ -1121,10 +1177,374 @@ impl BrowserApp {
     }
 }
 
+    /// Feed JS console output from a page load into the DevTools console
+    pub fn push_console_messages(&self, logs: &[String], errors: &[String]) {
+        if let Ok(dt) = self.devtools.lock() {
+            if let Ok(mut console) = dt.console.lock() {
+                for msg in logs {
+                    console.log(msg);
+                }
+                for err in errors {
+                    console.error(err);
+                }
+            }
+        }
+    }
+
+    /// Render the full DevTools panel
+    fn render_devtools(&mut self, ui: &mut egui::Ui) {
+        // ── Tab bar ──────────────────────────────────────────────────────────
+        ui.horizontal(|ui| {
+            let tabs = ["🖥 Console", "🔎 Elements", "🌐 Network", "⏱ Performance"];
+            for (i, label) in tabs.iter().enumerate() {
+                let selected = self.devtools_tab == i;
+                let btn = egui::Button::new(*label)
+                    .fill(if selected {
+                        ui.style().visuals.selection.bg_fill
+                    } else {
+                        ui.style().visuals.widgets.inactive.bg_fill
+                    });
+                if ui.add(btn).clicked() {
+                    self.devtools_tab = i;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("✖ Close").clicked() {
+                    self.show_devtools = false;
+                }
+                if ui.small_button("🗑 Clear").clicked() {
+                    if let Ok(dt) = self.devtools.lock() {
+                        dt.clear_all();
+                    }
+                }
+            });
+        });
+        ui.separator();
+
+        match self.devtools_tab {
+            0 => self.render_devtools_console(ui),
+            1 => self.render_devtools_elements(ui),
+            2 => self.render_devtools_network(ui),
+            3 => self.render_devtools_performance(ui),
+            _ => {}
+        }
+    }
+
+    /// Console tab
+    fn render_devtools_console(&mut self, ui: &mut egui::Ui) {
+        // Filter bar
+        ui.horizontal(|ui| {
+            ui.label("Filter:");
+            ui.text_edit_singleline(&mut self.console_filter);
+            ui.separator();
+            for (level, label, color) in [
+                (None, "All", egui::Color32::GRAY),
+                (Some(LogLevel::Log), "Log", egui::Color32::WHITE),
+                (Some(LogLevel::Warn), "Warn", egui::Color32::YELLOW),
+                (Some(LogLevel::Error), "Error", egui::Color32::RED),
+            ] {
+                let active = self.console_level_filter == level;
+                let btn = egui::Button::new(egui::RichText::new(label).color(color))
+                    .fill(if active {
+                        ui.style().visuals.selection.bg_fill
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    });
+                if ui.add(btn).clicked() {
+                    self.console_level_filter = level;
+                }
+            }
+        });
+        ui.separator();
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                let messages = {
+                    if let Ok(dt) = self.devtools.lock() {
+                        if let Ok(console) = dt.console.lock() {
+                            console.messages().cloned().collect::<Vec<_>>()
+                        } else { vec![] }
+                    } else { vec![] }
+                };
+
+                // Also show JS output from current tab
+                let tab_logs = self.tabs.active_tab()
+                    .map(|t| t.content().console_output)
+                    .unwrap_or_default();
+
+                let filter = self.console_filter.to_lowercase();
+
+                // Render tab logs first (current page JS output)
+                for log in &tab_logs {
+                    if !filter.is_empty() && !log.to_lowercase().contains(&filter) { continue; }
+                    if matches!(self.console_level_filter, Some(LogLevel::Warn) | Some(LogLevel::Error)) { continue; }
+                    ui.horizontal(|ui| {
+                        ui.colored_label(egui::Color32::from_rgb(180, 180, 180), "►");
+                        ui.label(egui::RichText::new(log).monospace().size(12.0));
+                    });
+                }
+
+                // Render DevTools console messages
+                for msg in &messages {
+                    if !filter.is_empty() && !msg.message.to_lowercase().contains(&filter) { continue; }
+                    if let Some(lvl) = self.console_level_filter {
+                        if msg.level != lvl { continue; }
+                    }
+                    let (icon, color) = match msg.level {
+                        LogLevel::Warn  => ("⚠", egui::Color32::YELLOW),
+                        LogLevel::Error => ("✖", egui::Color32::RED),
+                        LogLevel::Info  => ("ℹ", egui::Color32::LIGHT_BLUE),
+                        LogLevel::Debug => ("🐛", egui::Color32::GRAY),
+                        _               => ("►", egui::Color32::WHITE),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.colored_label(color, icon);
+                        ui.label(egui::RichText::new(&msg.message).monospace().size(12.0).color(color));
+                    });
+                }
+
+                if tab_logs.is_empty() && messages.is_empty() {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(egui::RichText::new("No console output").color(egui::Color32::GRAY).italics());
+                    });
+                }
+            });
+    }
+
+    /// Elements (DOM) tab
+    fn render_devtools_elements(&mut self, ui: &mut egui::Ui) {
+        let content = self.tabs.active_tab()
+            .map(|t| t.content())
+            .unwrap_or_default();
+
+        if content.elements.is_empty() {
+            ui.label(egui::RichText::new("No page loaded").color(egui::Color32::GRAY).italics());
+            return;
+        }
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(format!(
+                    "<html> → {} rendered elements", content.elements.len()
+                )).monospace().size(12.0));
+                ui.separator();
+
+                for (i, elem) in content.elements.iter().enumerate().take(200) {
+                    let tag = format!("{:?}", elem.kind)
+                        .to_lowercase()
+                        .replace("heading1", "h1")
+                        .replace("heading2", "h2")
+                        .replace("heading3", "h3");
+
+                    let preview = if elem.text.len() > 50 {
+                        format!("{}…", &elem.text[..47])
+                    } else {
+                        elem.text.clone()
+                    };
+
+                    let color = match elem.kind {
+                        super::ElementKind::Link => egui::Color32::LIGHT_BLUE,
+                        super::ElementKind::Heading1 | super::ElementKind::Heading2 | super::ElementKind::Heading3
+                            => egui::Color32::from_rgb(220, 120, 60),
+                        _ => egui::Color32::from_rgb(100, 180, 100),
+                    };
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("{:>3}", i)).size(11.0).color(egui::Color32::GRAY));
+                        ui.label(egui::RichText::new(format!("<{}>", tag)).monospace().size(12.0).color(color));
+                        ui.label(egui::RichText::new(&preview).size(12.0));
+                    });
+                }
+
+                if content.elements.len() > 200 {
+                    ui.label(egui::RichText::new(format!(
+                        "… {} more elements (showing first 200)", content.elements.len() - 200
+                    )).color(egui::Color32::GRAY).italics());
+                }
+            });
+    }
+
+    /// Network tab
+    fn render_devtools_network(&mut self, ui: &mut egui::Ui) {
+        let requests = {
+            if let Ok(dt) = self.devtools.lock() {
+                if let Ok(ni) = dt.network_inspector.lock() {
+                    ni.requests().cloned().collect::<Vec<_>>()
+                } else { vec![] }
+            } else { vec![] }
+        };
+
+        if requests.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.add_space(20.0);
+                ui.label(egui::RichText::new("No network requests recorded").color(egui::Color32::GRAY).italics());
+                ui.label(egui::RichText::new("Navigate to a page to see requests").size(11.0).color(egui::Color32::DARK_GRAY));
+            });
+            return;
+        }
+
+        // Header
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Method").strong().size(11.0));
+            ui.add_space(40.0);
+            ui.label(egui::RichText::new("Status").strong().size(11.0));
+            ui.add_space(30.0);
+            ui.label(egui::RichText::new("URL").strong().size(11.0));
+        });
+        ui.separator();
+
+        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+            for req in &requests {
+                let status_color = match req.status {
+                    RequestStatus::Complete => egui::Color32::GREEN,
+                    RequestStatus::Failed   => egui::Color32::RED,
+                    _                                         => egui::Color32::YELLOW,
+                };
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(req.method.as_str()).monospace().size(11.0));
+                    ui.colored_label(status_color, format!("{}", req.status_code.unwrap_or(0)));
+                    let url_short = if req.url.len() > 80 { &req.url[..77] } else { &req.url };
+                    ui.label(egui::RichText::new(url_short).monospace().size(11.0));
+                });
+            }
+        });
+    }
+
+    /// Performance tab
+    fn render_devtools_performance(&mut self, ui: &mut egui::Ui) {
+        // Collect metrics: profiler data + tab load_time_ms
+        let mut metrics: Vec<(String, f32)> = {
+            if let Ok(dt) = self.devtools.lock() {
+                if let Ok(p) = dt.profiler.lock() {
+                    p.summary().into_iter().map(|(k, v)| (k.as_str().to_string(), v as f32)).collect()
+                } else { vec![] }
+            } else { vec![] }
+        };
+
+        // Add live data from active tab
+        if let Some(tab) = self.tabs.active_tab() {
+            let content = tab.content();
+            if let Some(ms) = content.load_time_ms {
+                metrics.push(("Page Load".to_string(), ms as f32));
+                metrics.push(("Elements Rendered".to_string(), content.elements.len() as f32));
+                metrics.push(("JS Errors".to_string(), content.js_errors.len() as f32));
+            }
+        }
+
+        ui.add_space(8.0);
+
+        if metrics.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.add_space(20.0);
+                ui.label(egui::RichText::new("No performance data yet").color(egui::Color32::GRAY).italics());
+                ui.label(egui::RichText::new("Navigate to a page to see metrics").size(11.0).color(egui::Color32::DARK_GRAY));
+            });
+        } else {
+            egui::Grid::new("perf_grid")
+                .num_columns(3)
+                .striped(true)
+                .spacing([16.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Metric").strong());
+                    ui.label(egui::RichText::new("Value").strong());
+                    ui.label(egui::RichText::new("Target").strong());
+                    ui.end_row();
+                    for (name, value) in &metrics {
+                        let (target, unit) = match name.as_str() {
+                            "Page Load" | "Load" | "LoadComplete" => (1500.0_f32, "ms"),
+                            "TTFB" => (200.0, "ms"),
+                            "FCP" | "FirstContentfulPaint" => (1800.0, "ms"),
+                            "LCP" | "LargestContentfulPaint" => (2500.0, "ms"),
+                            "TTI" | "TimeToInteractive" => (3800.0, "ms"),
+                            "Elements Rendered" | "JS Errors" => (f32::MAX, ""),
+                            _ => (f32::MAX, "ms"),
+                        };
+                        let color = if target < f32::MAX {
+                            if *value <= target { egui::Color32::GREEN } else { egui::Color32::RED }
+                        } else {
+                            egui::Color32::WHITE
+                        };
+                        ui.label(egui::RichText::new(name));
+                        ui.colored_label(color, if unit.is_empty() {
+                            format!("{:.0}", value)
+                        } else {
+                            format!("{:.0}{}", value, unit)
+                        });
+                        if target < f32::MAX {
+                            ui.label(egui::RichText::new(format!("< {:.0}ms", target)).color(egui::Color32::GRAY));
+                        } else {
+                            ui.label("-");
+                        }
+                        ui.end_row();
+                    }
+                });
+        }
+    }
+
+
 impl eframe::App for BrowserApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Process pending image loads
         self.process_image_loads(ctx);
+
+        // ── Keyboard shortcuts ───────────────────────────────────────────────
+        ctx.input(|i| {
+            let ctrl = i.modifiers.ctrl;
+            let alt  = i.modifiers.alt;
+            // Ctrl+T — new tab
+            if ctrl && i.key_pressed(egui::Key::T) {
+                let id = self.tabs.create_tab();
+                self.tabs.set_active(id);
+                self.url_input.clear();
+                self.focus_url_bar = true;
+            }
+            // Ctrl+W — close active tab
+            if ctrl && i.key_pressed(egui::Key::W) {
+                if let Some(tab) = self.tabs.active_tab() {
+                    let id = tab.id();
+                    self.tabs.close_tab(id);
+                }
+            }
+            // Ctrl+R or F5 — reload
+            if (ctrl && i.key_pressed(egui::Key::R)) || i.key_pressed(egui::Key::F4) {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.reload();
+                }
+            }
+            // Ctrl+L — focus address bar
+            if ctrl && i.key_pressed(egui::Key::L) {
+                self.focus_url_bar = true;
+            }
+            // Alt+Left — back
+            if alt && i.key_pressed(egui::Key::ArrowLeft) {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    if tab.can_go_back() {
+                        tab.go_back();
+                        self.url_input = tab.url().to_string();
+                    }
+                }
+            }
+            // Alt+Right — forward
+            if alt && i.key_pressed(egui::Key::ArrowRight) {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    if tab.can_go_forward() {
+                        tab.go_forward();
+                        self.url_input = tab.url().to_string();
+                    }
+                }
+            }
+            // F12 — toggle DevTools
+            if i.key_pressed(egui::Key::F4) {
+                self.show_devtools = !self.show_devtools;
+            }
+            // Escape — close DevTools if open
+            if i.key_pressed(egui::Key::Escape) && self.show_devtools {
+                self.show_devtools = false;
+            }
+        });
 
         // Apply theme
         match self.config.theme {
@@ -1151,7 +1571,18 @@ impl eframe::App for BrowserApp {
                         ui.spinner();
                         ui.label("Loading...");
                     } else {
-                        ui.label(format!("Ready - {}", tab.url()));
+                        let content = tab.content();
+                        let load_info = content.load_time_ms
+                            .map(|ms| format!(" ({ms}ms)"))
+                            .unwrap_or_default();
+                        ui.label(format!("✓ Ready{load_info} — {}", tab.url()));
+                        // Show element count
+                        if !content.elements.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(
+                                format!("{} elements", content.elements.len())
+                            ).color(egui::Color32::GRAY).size(11.0));
+                        }
                     }
                 } else {
                     ui.label("Ready");
@@ -1163,11 +1594,10 @@ impl eframe::App for BrowserApp {
         if self.show_devtools {
             egui::TopBottomPanel::bottom("devtools")
                 .resizable(true)
-                .min_height(100.0)
+                .min_height(200.0)
+                .default_height(280.0)
                 .show(ctx, |ui| {
-                    ui.heading("Developer Tools");
-                    ui.separator();
-                    ui.label("Console, Network, Elements, etc.");
+                    self.render_devtools(ui);
                 });
         }
 
