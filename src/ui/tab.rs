@@ -944,11 +944,40 @@ fn parse_pseudo_class(s: &str) -> Option<PseudoClass> {
 }
 
 /// Parse a simple selector part (tag#id.class1.class2:pseudo)
+/// Strip CSS attribute selectors [attr], [attr=val], etc. from a selector string
+/// We use approximate matching (ignore attr constraints) for now
+fn strip_attribute_selectors(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut depth = 0i32;
+    for ch in s.chars() {
+        match ch {
+            '[' => depth += 1,
+            ']' => { depth -= 1; }
+            _ if depth == 0 => result.push(ch),
+            _ => {}
+        }
+    }
+    result
+}
+
 fn parse_simple_selector(s: &str) -> SimpleSelector {
     let s = s.trim();
     let mut selector = SimpleSelector::new();
 
     if s.is_empty() {
+        return selector;
+    }
+
+    // Handle attribute selectors: strip [attr], [attr=val], [attr^=val], etc.
+    // We strip them but don't block matching — approximation for broad compatibility
+    let s = &strip_attribute_selectors(s);
+
+    // Handle ::pseudo-elements (::before, ::after, ::placeholder, etc.) — strip them
+    let s = if let Some(pos) = s.find("::") { &s[..pos] } else { s };
+    let s = s.trim();
+
+    if s.is_empty() || s == "*" {
+        // Universal selector or empty after stripping
         return selector;
     }
 
@@ -1382,6 +1411,75 @@ fn fetch_external_css_for_page(url: &str, page_url: &str) -> Option<String> {
 }
 
 /// Parse HTML to renderable content
+/// Extract the <base href="..."> value from <head>, or None if not present
+fn extract_base_href(handle: &Handle, fallback: &str) -> Option<String> {
+    use markup5ever_rcdom::NodeData;
+    fn find_base(handle: &Handle) -> Option<String> {
+        if let NodeData::Element { name, attrs, .. } = &handle.data {
+            let tag = name.local.as_ref();
+            if tag == "base" {
+                let href = attrs.borrow().iter()
+                    .find(|a| a.name.local.as_ref() == "href")
+                    .map(|a| a.value.to_string());
+                if let Some(href) = href {
+                    if href.starts_with("http://") || href.starts_with("https://") {
+                        return Some(href);
+                    }
+                }
+            }
+        }
+        for child in handle.children.borrow().iter() {
+            if let Some(result) = find_base(child) {
+                return Some(result);
+            }
+        }
+        None
+    }
+    find_base(handle)
+}
+
+/// Extract max-width from <meta name="viewport" content="width=device-width,...">
+/// Returns 1280.0 as default viewport width
+fn extract_viewport_width(handle: &Handle) -> f32 {
+    use markup5ever_rcdom::NodeData;
+    fn find_viewport(handle: &Handle) -> Option<f32> {
+        if let NodeData::Element { name, attrs, .. } = &handle.data {
+            let tag = name.local.as_ref();
+            if tag == "meta" {
+                let attrs_ref = attrs.borrow();
+                let is_viewport = attrs_ref.iter()
+                    .any(|a| a.name.local.as_ref() == "name" && a.value.to_string() == "viewport");
+                if is_viewport {
+                    // Check for width=<N> in content
+                    if let Some(content) = attrs_ref.iter()
+                        .find(|a| a.name.local.as_ref() == "content")
+                        .map(|a| a.value.to_string())
+                    {
+                        for part in content.split(',') {
+                            let part = part.trim();
+                            if let Some(val) = part.strip_prefix("width=") {
+                                if val.trim() == "device-width" {
+                                    return Some(1280.0); // Assume desktop
+                                }
+                                if let Ok(w) = val.trim().parse::<f32>() {
+                                    return Some(w);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for child in handle.children.borrow().iter() {
+            if let Some(w) = find_viewport(child) {
+                return Some(w);
+            }
+        }
+        None
+    }
+    find_viewport(handle).unwrap_or(1280.0)
+}
+
 fn parse_html_to_content(html: &str, base_url: &str) -> PageContent {
     use html5ever::tendril::TendrilSink;
     use html5ever::{ParseOpts, parse_document};
@@ -1410,6 +1508,13 @@ fn parse_html_to_content(html: &str, base_url: &str) -> PageContent {
         .read_from(&mut html.as_bytes())
         .expect("Failed to parse HTML");
 
+    // Extract <base href> if present — overrides base_url for relative resolution
+    let effective_base_url = extract_base_href(&dom.document, base_url);
+    let base_url = effective_base_url.as_deref().unwrap_or(base_url);
+
+    // Extract viewport width from <meta name="viewport"> for media queries
+    let viewport_width = extract_viewport_width(&dom.document);
+
     // Collect all CSS: external stylesheets (parallel) + inline styles
     let mut all_css = String::new();
 
@@ -1433,8 +1538,8 @@ fn parse_html_to_content(html: &str, base_url: &str) -> PageContent {
     let inline_css = extract_stylesheets(&dom.document);
     all_css.push_str(&inline_css);
 
-    // Parse all CSS rules
-    let css_rules = parse_css_rules(&all_css);
+    // Parse all CSS rules (with viewport for @media evaluation)
+    let css_rules = parse_css_rules_with_viewport(&all_css, viewport_width, 720.0);
 
     let mut elements = Vec::new();
     let mut title = String::new();
@@ -3528,11 +3633,57 @@ fn extract_text(handle: &Handle) -> String {
                     text.push_str(s);
                 }
             }
-            NodeData::Element { name, .. } => {
+            NodeData::Element { name, attrs, .. } => {
                 let tag = name.local.as_ref();
-                if tag != "script" && tag != "style" {
-                    for child in handle.children.borrow().iter() {
-                        collect(child, text);
+                match tag {
+                    "script" | "style" | "noscript" => {
+                        // Skip — not visible text
+                    }
+                    "img" => {
+                        // Use alt text for images
+                        let alt = attrs.borrow().iter()
+                            .find(|a| a.name.local.as_ref() == "alt")
+                            .map(|a| a.value.to_string())
+                            .unwrap_or_default();
+                        if !alt.is_empty() {
+                            if !text.is_empty() { text.push(' '); }
+                            text.push_str(&alt);
+                        }
+                    }
+                    "input" | "button" => {
+                        // Use value or placeholder
+                        let attrs_ref = attrs.borrow();
+                        let val = attrs_ref.iter()
+                            .find(|a| matches!(a.name.local.as_ref(), "value" | "placeholder"))
+                            .map(|a| a.value.to_string())
+                            .unwrap_or_default();
+                        if !val.is_empty() {
+                            if !text.is_empty() { text.push(' '); }
+                            text.push_str(&val);
+                        }
+                        // Also recurse for button children
+                        if tag == "button" {
+                            for child in handle.children.borrow().iter() {
+                                collect(child, text);
+                            }
+                        }
+                    }
+                    _ => {
+                        // Check aria-label as fallback text source
+                        let aria = attrs.borrow().iter()
+                            .find(|a| a.name.local.as_ref() == "aria-label")
+                            .map(|a| a.value.to_string())
+                            .unwrap_or_default();
+                        // Recurse into children first
+                        let before = text.len();
+                        for child in handle.children.borrow().iter() {
+                            collect(child, text);
+                        }
+                        // If element has no text children, use aria-label
+                        if text.len() == before && !aria.is_empty() {
+                            if !text.is_empty() { text.push(' '); }
+                            text.push_str(&aria);
+                        }
                     }
                 }
             }
@@ -3545,7 +3696,9 @@ fn extract_text(handle: &Handle) -> String {
     }
 
     collect(handle, &mut text);
-    text
+    // Collapse multiple spaces
+    let re_spaces = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    re_spaces
 }
 
 /// Helper to get an attribute value from attrs

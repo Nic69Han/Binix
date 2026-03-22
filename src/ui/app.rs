@@ -294,16 +294,55 @@ impl BrowserApp {
 
     /// Render parsed HTML content with CSS styling
     fn render_page_content(&mut self, ui: &mut egui::Ui, content: &super::PageContent) {
+        // ── Render fixed/absolute positioned elements via egui::Area (overlay) ──
+        let fixed_elements: Vec<&super::RenderElement> = content.elements.iter()
+            .filter(|e| matches!(e.style.position, super::Position::Fixed | super::Position::Absolute))
+            .collect();
+
+        for fixed in &fixed_elements {
+            let area_id = egui::Id::new(format!("fixed_{:.0}_{:.0}", fixed.bounds.x, fixed.bounds.y));
+            let pos = egui::pos2(fixed.bounds.x, fixed.bounds.y);
+            egui::Area::new(area_id)
+                .fixed_pos(pos)
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    if let Some(bg) = fixed.style.background_color {
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]))
+                            .inner_margin(egui::Margin::same(fixed.style.padding[0]))
+                            .show(ui, |ui| {
+                                let text = egui::RichText::new(&fixed.text)
+                                    .size(fixed.style.font_size)
+                                    .color(egui::Color32::from_rgba_unmultiplied(
+                                        fixed.style.color[0], fixed.style.color[1],
+                                        fixed.style.color[2], fixed.style.color[3],
+                                    ));
+                                ui.label(text);
+                            });
+                    } else {
+                        let text = egui::RichText::new(&fixed.text)
+                            .size(fixed.style.font_size);
+                        ui.label(text);
+                    }
+                });
+        }
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let available_width = ui.available_width();
                 ui.set_min_width(available_width);
 
-                // Group consecutive inline elements
+                // Group consecutive inline elements (skip fixed/absolute — already rendered above)
                 let mut i = 0;
                 while i < content.elements.len() {
                     let element = &content.elements[i];
+
+                    // Skip positioned elements — rendered as overlays above
+                    if matches!(element.style.position, super::Position::Fixed | super::Position::Absolute) {
+                        i += 1;
+                        continue;
+                    }
 
                     if element.is_inline {
                         // Collect all consecutive inline elements
