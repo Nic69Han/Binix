@@ -1,75 +1,25 @@
-[package]
-name = "binix"
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
-edition = "2024"
-description = "Ultra-High-Performance Web Browser"
-license = "MIT"
-authors = ["Binix Team"]
+edition = "2021"
+authors = ["Nic69Han"]
+license = "GPL-3.0"
 
-[dependencies]
-# Async runtime
-tokio = { version = "1.0", features = ["full"] }
-futures = "0.3"
-html5ever = "0.36.1"
-markup5ever = "0.36.1"
-url = "2.5.7"
-cssparser = "0.36.0"
-selectors = "0.33.0"
-reqwest = { version = "0.12.25", features = ["rustls-tls", "http2", "json", "gzip", "brotli", "deflate", "blocking"] }
-wgpu = "27.0.1"
-log = "0.4.29"
-env_logger = "0.11.8"
-thiserror = "2.0.17"
-boa_engine = "0.21.0"
-boa_gc = "0.21.0"
-winit = "0.30.12"
-egui = "0.33.3"
-eframe = "0.33.3"
-wasmtime = "39.0.1"
-wasmtime-wasi = "39.0.1"
-quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls", "ring"] }
-rustls = { version = "0.23.35", default-features = false, features = ["ring", "std", "tls12"] }
-rustls-native-certs = "0.8.2"
-base64 = "0.22.1"
-ring = "0.17.14"
-markup5ever_rcdom = "0.36.0"
-image = "0.25.9"
-taffy = "0.9.2"
-serde_json = "1.0.145"
-
-# Core dependencies will be added as we build the browser
-# See docs/browser_technical_specification.md for full list
-
-[dev-dependencies]
-# Benchmarking - statistical performance testing
-criterion = { version = "0.5", features = ["html_reports"] }
-
-# Property-based testing - automatic test case generation
-proptest = "1.4"
-
-# Async testing utilities
-tokio-test = "0.4"
-
-# Test utilities
-pretty_assertions = "1.4"
-
-# Mocking framework
-mockall = "0.12"
-
-[features]
-default = []
-# Enable benchmarks - only run in CI to avoid freezing local machines
-run-benchmarks = []
-
-[[bench]]
-name = "benchmarks"
-harness = false
-required-features = ["run-benchmarks"]
-
-[profile.release]
-lto = true
-codegen-units = 1
-panic = "abort"
-
-[profile.bench]
-debug = true
+[workspace.dependencies]
+thiserror = "2.0"
+log = "0.4"
+tokio = { version = "1.43", features = ["full"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "http2", "json"] }
+html5ever = "0.36"
+markup5ever_rcdom = "0.36"
+cssparser = "0.36"
+selectors = "0.33"
+taffy = "0.9"
+wgpu = "27.0"
+boa_engine = "0.21"
+egui = "0.33"
+eframe = "0.33"
+async-trait = "0.1"
