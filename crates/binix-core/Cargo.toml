@@ -1,8 +1,9 @@
 [package]
 name = "binix-core"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-thiserror = "2.0"
-async-trait = "0.1"
+thiserror.workspace = true
+log.workspace = true
+async-trait.workspace = true
