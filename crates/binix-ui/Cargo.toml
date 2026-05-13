@@ -4,6 +4,26 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-binix-core = { path = "../binix-core" }
 egui = "0.33"
 eframe = "0.33"
+
+[dependencies.binix-core]
+path = "../binix-core"
+
+[dependencies.binix-net]
+path = "../binix-net"
+
+[dependencies.binix-dom]
+path = "../binix-dom"
+
+[dependencies.binix-layout]
+path = "../binix-layout"
+
+[dependencies.binix-compositor]
+path = "../binix-compositor"
+
+[dependencies.binix-js]
+path = "../binix-js"
+
+[dependencies.binix-security]
+path = "../binix-security"
