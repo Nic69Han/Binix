@@ -1,0 +1,9 @@
+[package]
+name = "binix-dom"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+binix-core = { path = "../binix-core" }
+html5ever = "0.26"
+markup5ever_rcdom = "0.2"
