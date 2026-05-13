@@ -1,0 +1,9 @@
+[package]
+name = "binix-css"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+binix-core = { path = "../binix-core" }
+cssparser = "0.36"
+selectors = "0.26"
