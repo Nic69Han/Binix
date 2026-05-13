@@ -1,6 +1,9 @@
-# Binix Refonte Progress
+# Phase 0: Configuration Initiale & Workspace
 
-[Phase 0] ✅ - 2026-05-13
+✅ **Terminé**
 
-Workspace créé avec toutes les crates : core, net, dom, css, layout, compositor, js, security, ui, app.
-Fichiers de base (Cargo.toml + lib.rs / main.rs) ajoutés.
+- Workspace Cargo configuré
+- Crates créées : binix-core, binix-net, binix-dom, binix-css, binix-layout, binix-compositor, binix-js, binix-security, binix-ui, binix-app
+- Structure modulaire mise en place
+
+Prochaine : Phase 1
