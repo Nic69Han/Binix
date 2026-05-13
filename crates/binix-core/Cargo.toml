@@ -4,6 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-thiserror = { workspace = true }
-log = { workspace = true }
-async-trait = { workspace = true }
+thiserror = "2.0"
+async-trait = "0.1"
