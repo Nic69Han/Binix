@@ -1,0 +1,8 @@
+[package]
+name = "binix-js"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+binix-core = { path = "../binix-core" }
+boa_engine = "0.21"
