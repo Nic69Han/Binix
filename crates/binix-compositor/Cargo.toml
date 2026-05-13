@@ -1,0 +1,10 @@
+[package]
+name = "binix-compositor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+binix-core = { path = "../binix-core" }
+wgpu = "27.0"
+font-kit = "0.14"
+swash = "0.3"
