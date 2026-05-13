@@ -1,0 +1,16 @@
+[package]
+name = "binix-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+binix-core = { path = "../binix-core" }
+binix-net = { path = "../binix-net" }
+binix-dom = { path = "../binix-dom" }
+binix-css = { path = "../binix-css" }
+binix-layout = { path = "../binix-layout" }
+binix-compositor = { path = "../binix-compositor" }
+binix-js = { path = "../binix-js" }
+binix-security = { path = "../binix-security" }
+binix-ui = { path = "../binix-ui" }
+env_logger = "0.11"
