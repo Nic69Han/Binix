@@ -1,0 +1,8 @@
+[package]
+name = "binix-layout"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+binix-core = { path = "../binix-core" }
+taffy = "0.9"
