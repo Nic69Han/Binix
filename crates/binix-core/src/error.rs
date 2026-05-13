@@ -3,7 +3,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum BinixError {
     #[error("Network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(String),
     #[error("Parse error: {0}")]
     Parse(String),
     #[error("Layout error: {0}")]
