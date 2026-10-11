@@ -15,6 +15,7 @@ binix info FILE                    # size, detected file type, Shannon entropy
 binix hex FILE [-s OFF] [-n LEN] [-w WIDTH]   # hexdump (offsets accept 0x..)
 binix strings FILE [-m MIN] [-t]   # printable ASCII strings, -t shows offsets
 binix headers FILE                 # ELF/PE header fields and section table
+binix diff A B [-c N]              # differing byte ranges; exit 1 if files differ
 ```
 
 Example:
@@ -45,7 +46,7 @@ python -m pytest
 - [x] `info`, `hex`, `strings` commands
 - [x] Tests wired into CI
 - [x] Header and section parsing for ELF (32/64-bit, both endiannesses) and PE (PE32/PE32+)
-- [ ] Binary diff
+- [x] Binary diff
 
 ## Contributing
 

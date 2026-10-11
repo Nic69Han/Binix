@@ -70,3 +70,21 @@ def hexdump(data: bytes, base: int = 0, width: int = 16) -> Iterator[str]:
         hexpart = " ".join(f"{b:02x}" for b in chunk).ljust(width * 3 - 1)
         text = "".join(chr(b) if 0x20 <= b < 0x7f else "." for b in chunk)
         yield f"{base + i:08x}  {hexpart}  |{text}|"
+
+
+def diff_ranges(a: bytes, b: bytes) -> Iterator[Tuple[int, int]]:
+    """Yield (offset, length) for each run of differing bytes.
+
+    Bytes present in only one input (length mismatch) count as differing.
+    """
+    n = max(len(a), len(b))
+    start = None
+    for i in range(n):
+        same = i < len(a) and i < len(b) and a[i] == b[i]
+        if not same and start is None:
+            start = i
+        elif same and start is not None:
+            yield start, i - start
+            start = None
+    if start is not None:
+        yield start, n - start

@@ -5,7 +5,7 @@ import sys
 from typing import List, Optional
 
 from . import __version__
-from .core import detect, entropy, hexdump, strings
+from .core import detect, diff_ranges, entropy, hexdump, strings
 from .formats import FormatError, parse
 
 
@@ -48,10 +48,31 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("-m", "--min-len", type=_positive, default=4)
     st.add_argument("-t", "--offsets", action="store_true", help="print hex offsets")
 
+    df = sub.add_parser("diff", help="byte ranges that differ between two files")
+    df.add_argument("file")
+    df.add_argument("other")
+    df.add_argument("-c", "--context", type=_non_negative, default=0,
+                    help="show up to N differing bytes per range (0: ranges only)")
+
     hd = sub.add_parser("headers", help="ELF/PE header fields and sections")
     hd.add_argument("file")
 
     return p
+
+
+def _print_diff(a_path: str, b_path: str, context: int) -> int:
+    a, b = _read(a_path), _read(b_path)
+    ranges = list(diff_ranges(a, b))
+    for off, length in ranges:
+        print(f"{off:08x}  {length} byte(s) differ")
+        if context:
+            n = min(length, context)
+            fmt = lambda d: " ".join(f"{x:02x}" for x in d[off:off + n]) or "(eof)"
+            print(f"  - {fmt(a)}")
+            print(f"  + {fmt(b)}")
+    if len(a) != len(b):
+        print(f"sizes differ: {len(a)} vs {len(b)} bytes")
+    return 1 if ranges else 0
 
 
 def _print_headers(path: str) -> int:
@@ -86,6 +107,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif args.command == "strings":
             for off, text in strings(_read(args.file), args.min_len):
                 print(f"{off:08x} {text}" if args.offsets else text)
+        elif args.command == "diff":
+            return _print_diff(args.file, args.other, args.context)
         elif args.command == "headers":
             return _print_headers(args.file)
     except FormatError as e:

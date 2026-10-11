@@ -46,3 +46,11 @@ def test_hexdump_layout():
 def test_hexdump_pads_last_line():
     lines = list(hexdump(b"ABCDE", width=4))
     assert lines[1] == "00000004  45           |E|"
+
+
+def test_diff_ranges():
+    from binix.core import diff_ranges
+    assert list(diff_ranges(b"abcdef", b"abcdef")) == []
+    assert list(diff_ranges(b"abcdef", b"aXcdYZ")) == [(1, 1), (4, 2)]
+    assert list(diff_ranges(b"abc", b"abcde")) == [(3, 2)]
+    assert list(diff_ranges(b"", b"")) == []
