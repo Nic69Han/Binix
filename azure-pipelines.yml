@@ -14,14 +14,28 @@ pr:
 pool:
   vmImage: ubuntu-latest
 
+strategy:
+  matrix:
+    py39:
+      python.version: '3.9'
+    py312:
+      python.version: '3.12'
+
 steps:
   - checkout: self
 
-  - script: |
-      set -euo pipefail
-      test -f LICENSE
-      test -f README.md
-      echo "Repository sanity checks passed."
-    displayName: 'Repository sanity checks'
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '$(python.version)'
+    displayName: 'Use Python $(python.version)'
 
-  # Add build and test steps here once the project language is chosen.
+  - script: |
+      python -m pip install --upgrade pip
+      pip install . pytest
+    displayName: 'Install'
+
+  - script: python -m pytest -v
+    displayName: 'Run tests'
+
+  - script: binix info LICENSE
+    displayName: 'Smoke test CLI'
