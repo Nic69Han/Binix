@@ -14,6 +14,7 @@ pip install .
 binix info FILE                    # size, detected file type, Shannon entropy
 binix hex FILE [-s OFF] [-n LEN] [-w WIDTH]   # hexdump (offsets accept 0x..)
 binix strings FILE [-m MIN] [-t]   # printable ASCII strings, -t shows offsets
+binix headers FILE                 # ELF/PE header fields and section table
 ```
 
 Example:
@@ -43,7 +44,7 @@ python -m pytest
 - [x] Azure Pipelines CI skeleton (runs on `main` and on pull requests)
 - [x] `info`, `hex`, `strings` commands
 - [x] Tests wired into CI
-- [ ] Section/header parsing for ELF and PE
+- [x] Header and section parsing for ELF (32/64-bit, both endiannesses) and PE (PE32/PE32+)
 - [ ] Binary diff
 
 ## Contributing

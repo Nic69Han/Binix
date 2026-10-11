@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from . import __version__
 from .core import detect, entropy, hexdump, strings
+from .formats import FormatError, parse
 
 
 def _read(path: str, offset: int = 0, length: Optional[int] = None) -> bytes:
@@ -47,7 +48,26 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("-m", "--min-len", type=_positive, default=4)
     st.add_argument("-t", "--offsets", action="store_true", help="print hex offsets")
 
+    hd = sub.add_parser("headers", help="ELF/PE header fields and sections")
+    hd.add_argument("file")
+
     return p
+
+
+def _print_headers(path: str) -> int:
+    h = parse(_read(path))
+    if h is None:
+        print(f"binix: {path}: not an ELF or PE file", file=sys.stderr)
+        return 1
+    width = max(len(k) for k in h.fields)
+    for k, v in h.fields.items():
+        print(f"{k + ':':<{width + 1}} {v}")
+    if h.sections:
+        print()
+        print(f"{'idx':>3}  {'name':<20} {'offset':>10} {'size':>10} {'address':>18}")
+        for i, s in enumerate(h.sections):
+            print(f"{i:>3}  {s.name[:20]:<20} {s.offset:>#10x} {s.size:>#10x} {s.address:>#18x}")
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -66,6 +86,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif args.command == "strings":
             for off, text in strings(_read(args.file), args.min_len):
                 print(f"{off:08x} {text}" if args.offsets else text)
+        elif args.command == "headers":
+            return _print_headers(args.file)
+    except FormatError as e:
+        print(f"binix: {args.file}: malformed headers: {e}", file=sys.stderr)
+        return 1
     except BrokenPipeError:
         return 0
     except OSError as e:
