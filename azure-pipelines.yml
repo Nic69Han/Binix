@@ -39,3 +39,9 @@ steps:
 
   - script: binix info LICENSE
     displayName: 'Smoke test CLI'
+
+  - script: |
+      pip install build twine
+      python -m build
+      twine check dist/*
+    displayName: 'Build and check distribution'
