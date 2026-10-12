@@ -1,19 +1,47 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
+# Azure Pipelines CI for Binix.
 # https://aka.ms/yaml
 
 trigger:
-- main
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
 
 pool:
   vmImage: ubuntu-latest
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+strategy:
+  matrix:
+    py39:
+      python.version: '3.9'
+    py312:
+      python.version: '3.12'
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+steps:
+  - checkout: self
+
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '$(python.version)'
+    displayName: 'Use Python $(python.version)'
+
+  - script: |
+      python -m pip install --upgrade pip
+      pip install . pytest
+    displayName: 'Install'
+
+  - script: python -m pytest -v
+    displayName: 'Run tests'
+
+  - script: binix info LICENSE
+    displayName: 'Smoke test CLI'
+
+  - script: |
+      pip install build twine
+      python -m build
+      twine check dist/*
+    displayName: 'Build and check distribution'

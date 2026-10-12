@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "binix"
+dynamic = ["version"]
+description = "Small dependency-free command-line toolkit for inspecting binary files."
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "Nic69Han" }]
+keywords = ["binary", "hexdump", "elf", "pe", "entropy", "strings", "diff", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/Nic69Han/Binix"
+Issues = "https://github.com/Nic69Han/Binix/issues"
+
+[project.scripts]
+binix = "binix.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "binix.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
